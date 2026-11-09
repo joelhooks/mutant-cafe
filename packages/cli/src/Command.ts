@@ -78,6 +78,7 @@ export const makeCommand = (options: {
     tsconfig: input.tsconfig,
     exportedOnly: input.exportedOnly,
     include: input.include.length > 0 ? input.include : fileConfig.include ?? ["**/*.{ts,tsx}"],
+    explicitIncludes: input.include.length > 0 || fileConfig.include !== undefined,
     exclude: input.exclude.length > 0 ? input.exclude : fileConfig.exclude ?? [],
     functionFilter: fileConfig.functionFilter ?? [],
     ...(inDiff === undefined ? {} : { inDiff }),

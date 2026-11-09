@@ -93,9 +93,11 @@ export function makeTypeScriptOracle(): TypeOracle {
         const local = relative(config.root, file).replaceAll("\\", "/");
         // Test support lives beside the project, so judge it relative to the tsconfig.
         const project = relative(dirname(configPath), file).replaceAll("\\", "/");
-        if (source.isDeclarationFile || local.startsWith("../") || /(?:^|\/)(?:node_modules|__tests__|__mocks__|tests?)\//.test(project) || /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(local)) continue;
-        for (const glob of config.include) if (matchesGlob(local, glob)) matched.add(glob);
-        if (config.include.length && !config.include.some((glob) => matchesGlob(local, glob))) continue;
+        if (source.isDeclarationFile || local.startsWith("../") || /(?:^|\/)node_modules\//.test(project) || /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(local)) continue;
+        const includedBy = config.include.filter(glob => matchesGlob(local, glob));
+        if (/(?:^|\/)(?:__tests__|__mocks__|tests?)\//.test(project) && (config.explicitIncludes === false || includedBy.length === 0)) continue;
+        for (const glob of includedBy) matched.add(glob);
+        if (config.include.length && includedBy.length === 0) continue;
         if (config.exclude.some((glob) => matchesGlob(local, glob))) continue;
         owners.set(file, session);
         const api = imports(source);
