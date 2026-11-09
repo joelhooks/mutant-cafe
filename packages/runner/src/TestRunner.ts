@@ -68,7 +68,7 @@ export const TestRunnerLive = Layer.effect(TestRunner, Effect.gen(function* () {
     // Vitest's reporter lifecycle is the machine-readable selection/progress
     // boundary. No human output parsing, and partial failures survive an outer kill.
     yield* fs.writeFileString(reporter, reporterSource(marker, probe)).pipe(Effect.mapError((error) => new TestSpawnError({ command: ["vitest"], message: String(error) })));
-    const command = [process.execPath, launcher, ...args, "--reporter=default", `--reporter=${reporter}`, "--bail", "1",
+    const command = [process.execPath, ...process.execArgv, launcher, ...args, "--reporter=default", `--reporter=${reporter}`, "--bail", "1",
       ...(timeoutMs === undefined ? [] : ["--testTimeout", String(testTimeoutMs ?? Math.max(1, Math.floor(timeoutMs / 2))), "--hookTimeout", String(testTimeoutMs ?? Math.max(1, Math.floor(timeoutMs / 2)))]),
       "--no-cache", "--no-fsModuleCache"];
     // Keep diagnostics off stdout so GitHub output is a Markdown document.
