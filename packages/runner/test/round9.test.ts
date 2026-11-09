@@ -103,3 +103,13 @@ it("names Vitest and preserves the exact physical launcher argv in diagnostics",
   expect(formatTestCommand(argv)).toBe(`vitest run --passWithNoTests --reporter=default --bail 1 (via ${argv.join(" ")})`);
   expect(formatTestCommand(["vitest", "run"])).toBe("vitest run");
 });
+
+it("names Vitest after runtime flags without hiding them from the physical argv", () => {
+  const command = ["/node", "--conditions=source", "--no-warnings", "/tmp/mutant-vitest-example/launch.mjs", "run", "--reporter=default", "--reporter=/tmp/reporter.mjs"];
+  expect(formatTestCommand(command)).toBe(`vitest run --reporter=default (via ${command.join(" ")})`);
+});
+
+it("does not mistake a runtime preload for the generated Vitest launcher", () => {
+  const command = ["/node", "--require", "/tmp/launch.mjs", "--import=/tmp/launch.mjs", "/tmp/mutant-vitest-example/launch.mjs", "run"];
+  expect(formatTestCommand(command)).toBe(`vitest run (via ${command.join(" ")})`);
+});
