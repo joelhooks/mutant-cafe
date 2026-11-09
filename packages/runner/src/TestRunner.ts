@@ -75,6 +75,7 @@ export const TestRunnerLive = Layer.effect(TestRunner, Effect.gen(function* () {
     const started = yield* Clock.currentTimeMillis;
     const owned = yield* acquireProcessTree(dir.path, onBackstop(dir.path), openedAt.get(dir.path)).pipe(Effect.provideService(FileSystem.FileSystem, fs),
       Effect.mapError(error => new TestSpawnError({ command, message: String(error) })));
+    command.splice(1, 0, ...owned.preloadArgs);
     const chunks: Array<string> = [];
     let exitCode = 1;
     const child = Effect.scoped(Effect.gen(function* () {

@@ -158,7 +158,7 @@ export const preflight = Effect.fn("TestRunner.preflight")(function* (root: stri
   const since = options.processesSince ?? (yield* Clock.currentTimeMillis);
   const owned = yield* acquireProcessTree(root, options.onBackstop, since);
   yield* owned.trace("preflight-start", { budgetMs: timeoutMs });
-  const output = yield* spawner.string(ChildProcess.make(process.execPath, ["--input-type=module", "--eval", probe, tsconfig], { cwd: root, env: owned.env, detached: true, killSignal: "SIGKILL", forceKillAfter: "100 millis", stdin: "ignore" })).pipe(Effect.onInterrupt(() => owned.cleanup));
+  const output = yield* spawner.string(ChildProcess.make(process.execPath, [...owned.preloadArgs, "--input-type=module", "--eval", probe, tsconfig], { cwd: root, env: owned.env, detached: true, killSignal: "SIGKILL", forceKillAfter: "100 millis", stdin: "ignore" })).pipe(Effect.onInterrupt(() => owned.cleanup));
   yield* owned.trace("preflight-done");
   const encoded = output.split("\n").find(line => line.startsWith("mutant-cafe-preflight:"))?.slice("mutant-cafe-preflight:".length);
   const issues = encoded === undefined
