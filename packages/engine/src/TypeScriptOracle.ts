@@ -934,7 +934,7 @@ function synthesizeValues(type: ts.Type, checker: ts.TypeChecker, location: ts.N
   }
   if ((type.flags & ts.TypeFlags.Object || type.isIntersection()) && !type.getCallSignatures().length && !type.getConstructSignatures().length) {
     const fields: Array<{ name: string; values: Value[] }> = [];
-    for (const prop of type.getProperties()) {
+    for (const prop of [...type.getProperties()].sort((a, b) => a.name.localeCompare(b.name, "en"))) {
       if (prop.flags & ts.SymbolFlags.Optional) continue;
       if (!/^[$\w]+$/.test(prop.name)) return [];
       const values = descend(checker.getTypeOfSymbolAtLocation(prop, location));
