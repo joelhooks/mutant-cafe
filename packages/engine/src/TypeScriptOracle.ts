@@ -839,11 +839,15 @@ function synthesizeValues(type: ts.Type, checker: ts.TypeChecker, location: ts.N
   if (type.isUnion()) {
     const members = [...type.types];
     // The checker can intern scalar unions in different orders across selections.
-    // Tagged structural variants retain their declaration order for cap selection.
-    if (members.every(member => member.isLiteral() || !!(member.flags & (ts.TypeFlags.BooleanLiteral | ts.TypeFlags.Null | ts.TypeFlags.Undefined)))) {
+    const scalar = members.every(member => member.isLiteral() || !!(member.flags & (ts.TypeFlags.BooleanLiteral | ts.TypeFlags.Null | ts.TypeFlags.Undefined)));
+    if (scalar) {
       members.sort((a, b) => a.isNumberLiteral() && b.isNumberLiteral() ? a.value - b.value : checker.typeToString(a).localeCompare(checker.typeToString(b), "en"));
     }
-    return members.flatMap(member => descend(member));
+    const values = members.flatMap(member => descend(member));
+    return scalar ? values : values.map(value => [valueKey(value.text), value] as const)
+      .sort(([a, left], [b, right]) => a.localeCompare(b, "en")
+        || (left.text < right.text ? -1 : left.text > right.text ? 1 : 0))
+      .map(([, value]) => value);
   }
   if (type.isStringLiteral()) return [value(JSON.stringify(type.value))];
   if (type.isNumberLiteral()) return [value(String(type.value))];
@@ -866,7 +870,7 @@ function synthesizeValues(type: ts.Type, checker: ts.TypeChecker, location: ts.N
   }
   if ((type.flags & ts.TypeFlags.Object || type.isIntersection()) && !type.getCallSignatures().length && !type.getConstructSignatures().length) {
     const fields: Array<{ name: string; values: Value[] }> = [];
-    for (const prop of type.getProperties()) {
+    for (const prop of [...type.getProperties()].sort((a, b) => a.name.localeCompare(b.name, "en"))) {
       if (prop.flags & ts.SymbolFlags.Optional) continue;
       if (!/^[$\w]+$/.test(prop.name)) return [];
       const values = descend(checker.getTypeOfSymbolAtLocation(prop, location));
