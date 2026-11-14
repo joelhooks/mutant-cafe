@@ -400,8 +400,10 @@ export const acquireProcessTree = Effect.fn("ProcessTree.acquire")(function* (sc
       Effect.catch(error => Console.warn(`Warning: cannot remove process ledger directory: ${error.message}`)));
   }).pipe(Effect.ensuring(Effect.sync(() => { liveLedgers.delete(ledger); }))));
   const existing = process.env.NODE_OPTIONS ?? "";
+  const bun = process.versions.bun !== undefined;
   return {
-    env: { ...process.env, MUTANT_CAFE_PROCESS_PHASE: undefined, [tokenKey]: token, [ledgerKey]: ledger, [preloadKey]: url, NODE_OPTIONS: `${existing} --import=${url}`.trim() },
+    env: { ...process.env, MUTANT_CAFE_PROCESS_PHASE: undefined, [tokenKey]: token, [ledgerKey]: ledger, [preloadKey]: url, NODE_OPTIONS: bun ? existing : `${existing} --import=${url}`.trim() },
+    preloadArgs: bun ? ["--preload", script] : [],
     addRoot: (pid: number) => { roots.add(pid); }, cleanup, reap, trace
   };
 });

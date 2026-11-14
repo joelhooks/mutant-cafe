@@ -70,7 +70,7 @@ class Host {
   constructor(root: string, script: string, reporter: string, tree: OwnedProcessTree, scope: Scope.Closeable, selectionOnly = false, decode = decodeWarmMessage) {
     this.tree = tree;
     this.scope = scope;
-    this.child = spawn(process.execPath, [script, reporter, selectionOnly ? "select" : "run"], {
+    this.child = spawn(process.execPath, [...tree.preloadArgs, script, reporter, selectionOnly ? "select" : "run"], {
       cwd: root, env: tree.env, detached: true, stdio: ["ignore", "pipe", "pipe", "ipc"]
     });
     if (this.child.pid) tree.addRoot(this.child.pid);
