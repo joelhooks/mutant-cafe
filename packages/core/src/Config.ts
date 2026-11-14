@@ -6,6 +6,7 @@ export const RunConfig = Schema.Struct({
   root: Schema.String,
   tsconfig: Schema.String,
   include: Schema.Array(Schema.String),
+  explicitIncludes: Schema.optional(Schema.Boolean),
   exclude: Schema.Array(Schema.String),
   functionFilter: Schema.Array(Schema.String),
   inDiff: Schema.optional(Schema.String),
