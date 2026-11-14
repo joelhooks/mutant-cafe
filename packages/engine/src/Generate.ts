@@ -1,6 +1,7 @@
 // A content digest is pure synchronous work; Effect 4.1.2 has no Crypto module.
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createHash } from "node:crypto";
+import ts from "typescript";
 import type { Genre, Mutant } from "@mutant-cafe/core";
 import type { MutableFunction, Value } from "./TypeOracle.ts";
 
@@ -106,7 +107,11 @@ function makeMutant(fn: MutableFunction, genre: Genre, text: string, synthetic: 
     : { startOffset: fn.startOffset, endOffset: fn.endOffset, text };
   // Identity describes the logical edit, never the physical prefix retained to
   // insert imports. Source line shifts above a binding do not retarget its id.
-  const id = createHash("sha256").update(JSON.stringify([fn.identityFile ?? fn.file, fn.name, fn.identityOrdinal ?? 0, fn.logicalSpan, genre, text, additions.map(item => item.statement)])).digest("hex").slice(0, 24);
+  const runtime = ts.transpileModule(`${additions.map(item => item.statement).join("\n")}\nasync function* mutation() { ${text} }`, {
+    fileName: fn.file,
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext, jsx: ts.JsxEmit.Preserve, removeComments: true, verbatimModuleSyntax: true },
+  }).outputText;
+  const id = createHash("sha256").update(JSON.stringify([fn.identityFile ?? fn.file, fn.name, fn.identityOrdinal ?? 0, fn.logicalSpan, genre, runtime])).digest("hex").slice(0, 24);
   return {
     id, file: fn.file, functionName: fn.name, returnType: fn.returnType, displayReturnType: fn.displayReturnType, genre,
     description: `replace ${fn.name} -> ${fn.returnType} with ${description}`,
