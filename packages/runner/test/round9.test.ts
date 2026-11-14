@@ -103,3 +103,40 @@ it("names Vitest and preserves the exact physical launcher argv in diagnostics",
   expect(formatTestCommand(argv)).toBe(`vitest run --passWithNoTests --reporter=default --bail 1 (via ${argv.join(" ")})`);
   expect(formatTestCommand(["vitest", "run"])).toBe("vitest run");
 });
+
+it.live("preserves runtime exec flags for cold conditional imports and the recorded command", () => Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const dir = yield* fixture;
+  yield* fs.writeFileString(`${dir.path}/package.json`, JSON.stringify({
+    type: "module", scripts: { test: "vitest run" },
+    imports: { "#choice": { "mutant-cafe-source": "./source.json", default: "./default.json" } }
+  }));
+  yield* fs.writeFileString(`${dir.path}/source.json`, '{"mode":"source"}');
+  yield* fs.writeFileString(`${dir.path}/default.json`, '{"mode":"default"}');
+  yield* fs.writeFileString(`${dir.path}/vitest.config.ts`, `
+    const require = process.getBuiltinModule("node:module").createRequire(import.meta.url);
+    process.getBuiltinModule("node:fs").writeFileSync(new URL("./runtime-choice", import.meta.url), require("#choice").mode);
+    export default { test: { maxWorkers: 1, include: ["value.test.ts"] } };`);
+  const previous = process.execArgv;
+  const flags = [...previous, "--conditions=mutant-cafe-source", "--no-warnings"];
+  yield* Effect.acquireRelease(
+    Effect.sync(() => { process.execArgv = flags; }),
+    () => Effect.sync(() => { process.execArgv = previous; })
+  );
+  const baseline = yield* (yield* TestRunner).baseline(dir);
+  expect(yield* fs.readFileString(`${dir.path}/runtime-choice`)).toBe("source");
+  const entry = baseline.testCommand.findIndex(value => value.endsWith("/launch.mjs"));
+  expect(baseline.testCommand[0]).toBe(process.execPath);
+  expect(entry).toBeGreaterThan(flags.length);
+  expect(baseline.testCommand.slice(entry - flags.length, entry)).toEqual(flags);
+}).pipe(Effect.scoped, Effect.provide(TestRunnerLive), Effect.provide(NodeServices.layer)), 20_000);
+
+it("names Vitest after runtime flags without hiding them from the physical argv", () => {
+  const command = ["/node", "--conditions=source", "--no-warnings", "/tmp/mutant-vitest-example/launch.mjs", "run", "--reporter=default", "--reporter=/tmp/reporter.mjs"];
+  expect(formatTestCommand(command)).toBe(`vitest run --reporter=default (via ${command.join(" ")})`);
+});
+
+it("does not mistake a runtime preload for the generated Vitest launcher", () => {
+  const command = ["/node", "--require", "/tmp/launch.mjs", "--import=/tmp/launch.mjs", "/tmp/mutant-vitest-example/launch.mjs", "run"];
+  expect(formatTestCommand(command)).toBe(`vitest run (via ${command.join(" ")})`);
+});
