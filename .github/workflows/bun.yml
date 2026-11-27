@@ -1,0 +1,38 @@
+name: Bun
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  launch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.3.0
+          run_install: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.3'
+      - run: pnpm install --frozen-lockfile
+      - name: Test Bun process ownership
+        working-directory: packages/runner
+        run: bun ../../node_modules/vitest/vitest.mjs run test/bun.test.ts --maxWorkers=2
+      - name: Test Bun runtime resolution flags
+        working-directory: packages/runner
+        run: bun ../../node_modules/vitest/vitest.mjs run test/round9.test.ts --maxWorkers=2 -t 'preserves resolution flags|drops debug'
+      - name: Test the recorded Bun baseline command
+        working-directory: packages/cli
+        run: bun ../../node_modules/vitest/vitest.mjs run test/cli.test.ts --maxWorkers=2 -t 'prints TypeScript diagnostics and a failed baseline command'
