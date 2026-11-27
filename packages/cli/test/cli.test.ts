@@ -170,7 +170,7 @@ it.live("prints TypeScript diagnostics and a failed baseline command, retaining 
   const launcher = command.find(arg => /\/mutant-vitest-[^/]+\/launch\.mjs$/.test(arg));
   if (!launcher) throw new Error(`Missing Vitest launcher in ${JSON.stringify(command)}`);
   const runtimeArgs = command.slice(1, command.indexOf(launcher));
-  if (process.versions.bun !== undefined && runtimeArgs.length > 0) {
+  if (process.versions.bun !== undefined) {
     expect(runtimeArgs).toEqual(["--preload", expect.stringMatching(/\/mutant-processes-[^/]+\/register\.mjs$/)]);
   } else {
     expect(runtimeArgs).toEqual([]);
