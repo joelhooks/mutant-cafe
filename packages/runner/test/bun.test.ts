@@ -96,3 +96,48 @@ for (const mode of ["preflight", "cold"] as const) it.live.skipIf(process.versio
     expect(rows.some(row => row.stage === "preload-ready" && row.pid === pid)).toBe(true);
   }
 }).pipe(Effect.scoped, Effect.provide(TestRunnerLive), Effect.provide(NodeServices.layer)), 20_000);
+
+it.live.skipIf(process.versions.bun === undefined)("registers two Vitest fork workers and Node descendants of Bun", () => Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const dir = yield* fixture;
+  const trace = `${dir.path}/worker-trace.jsonl`;
+  const previous = process.env.MUTANT_CAFE_PROCESS_TRACE;
+  yield* Effect.acquireRelease(
+    Effect.sync(() => { process.env.MUTANT_CAFE_PROCESS_TRACE = trace; }),
+    () => Effect.sync(() => { if (previous === undefined) delete process.env.MUTANT_CAFE_PROCESS_TRACE; else process.env.MUTANT_CAFE_PROCESS_TRACE = previous; })
+  );
+  yield* fs.writeFileString(`${dir.path}/vitest.config.ts`, `
+    import { execFileSync } from "node:child_process";
+    import { writeFileSync } from "node:fs";
+    // A PATH-resolved Node child of the Bun Vitest host, not another Bun child.
+    const descendant = execFileSync("node", ["-e", ${JSON.stringify(String.raw`
+      const { readFileSync } = require("node:fs");
+      if (process.versions.bun) throw new Error("expected Node");
+      const rows = readFileSync(process.env.MUTANT_CAFE_PROCESS_LEDGER, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse);
+      if (!rows.some(row => row.pid === process.pid && row.birth)) throw new Error("Node descendant did not register itself before entry");
+      console.log(process.pid);
+    `)}], { encoding: "utf8", stdio: "pipe", timeout: 3000 });
+    writeFileSync(${JSON.stringify(`${dir.path}/node.pid`)}, descendant);
+    export default { test: { pool: "forks", maxWorkers: 2 } };`);
+  for (const name of ["value", "second"]) yield* fs.writeFileString(`${dir.path}/${name}.test.ts`, `
+    import { writeFileSync, readFileSync } from "node:fs";
+    import { it, expect } from "vitest";
+    it("has an owned fork", () => {
+      const rows = readFileSync(process.env.MUTANT_CAFE_PROCESS_LEDGER, "utf8").trim().split("\\n").filter(Boolean).map(JSON.parse);
+      expect(rows.some(row => row.pid === process.pid && row.birth)).toBe(true);
+      writeFileSync(new URL("./${name}.pid", import.meta.url), String(process.pid));
+    });`);
+  const baseline = yield* (yield* TestRunner).baseline(dir, undefined, 10_000);
+  expect(Object.keys(baseline.testDurations ?? {})).toHaveLength(2);
+  const pids = yield* Effect.forEach(["value", "second"], name => fs.readFileString(`${dir.path}/${name}.pid`).pipe(Effect.map(Number)));
+  expect(new Set(pids).size).toBe(2);
+  const rows = yield* Effect.forEach((yield* fs.readFileString(trace)).trim().split("\n"), line => Schema.decodeEffect(TraceRow)(line));
+  const host = rows.find(row => row.stage === "cold-spawn")?.childPid;
+  expect(host).toBeGreaterThan(0);
+  const nodePid = Number(yield* fs.readFileString(`${dir.path}/node.pid`));
+  expect(pids).not.toContain(nodePid);
+  for (const pid of [...pids, nodePid]) {
+    expect(rows.some(row => row.stage === "ps-record-done" && row.pid === pid && row.targetPid === pid)).toBe(true);
+    expect(rows.some(row => row.stage === "preload-ready" && row.pid === pid && row.ppid === host)).toBe(true);
+  }
+}).pipe(Effect.scoped, Effect.provide(TestRunnerLive), Effect.provide(NodeServices.layer)), 20_000);

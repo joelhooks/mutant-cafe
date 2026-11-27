@@ -7,7 +7,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as Path from "effect/Path";
 import { TestRunnerLive } from "../src/TestRunner.ts";
-import { ProcessInspector } from "../src/ProcessTree.ts";
+import { ProcessInspector, WarnedRuntimeFlags } from "../src/ProcessTree.ts";
 import { preflight } from "../src/Preflight.ts";
 import { openWarmRunner } from "../src/WarmRunner.ts";
 
@@ -156,10 +156,14 @@ it.live("drops debug, test, watch and eval modes without forwarding the eval ope
     Effect.sync(() => { process.execArgv = ["--inspect-brk", "--test", "--watch", "-e", "--conditions=not-an-option"]; }),
     () => Effect.sync(() => { process.execArgv = previous; })
   );
-  const baseline = yield* (yield* TestRunner).baseline(dir, undefined, 5000).pipe(
-    Effect.provideService(Console.Console, { ...original, warn: (...args: ReadonlyArray<unknown>) => { warnings.push(args.join(" ")); } }));
-  expect(Object.keys(baseline.testDurations ?? {})).toHaveLength(1);
-  expect(baseline.testCommand.filter(arg => /inspect|^--test$|^--watch$|^-e$|not-an-option/.test(arg))).toEqual([]);
+  const runner = yield* TestRunner;
+  const warn = (...args: ReadonlyArray<unknown>) => { warnings.push(args.join(" ")); };
+  const [baseline] = yield* Effect.gen(function* () {
+    return [yield* runner.baseline(dir, undefined, 5000), yield* runner.baseline(dir, undefined, 5000)];
+  }).pipe(Effect.provideService(Console.Console, { ...original, warn }), Effect.provideService(WarnedRuntimeFlags, new Set()));
+  expect(warnings).toHaveLength(1);
+  expect(Object.keys(baseline?.testDurations ?? {})).toHaveLength(1);
+  expect(baseline?.testCommand.filter(arg => /inspect|^--test$|^--watch$|^-e$|not-an-option/.test(arg))).toEqual([]);
   const warning = warnings.join("\n");
   for (const flag of ["--inspect-brk", "--test", "--watch", "-e"]) expect(warning).toContain(flag);
   expect(warning).not.toContain("not-an-option");

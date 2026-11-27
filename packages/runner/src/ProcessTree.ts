@@ -24,7 +24,7 @@ const execute = promisify(execFile);
 // Warning-only recognition spans selectors and execution sessions. These paths
 // never authorize a signal: discover() still uses only its own ledger.
 const liveLedgers = new Set<string>();
-const warnedRuntimeFlags = new Set<string>();
+export const WarnedRuntimeFlags = Context.Reference<Set<string>>("@mutant-cafe/runner/WarnedRuntimeFlags", { defaultValue: () => new Set() });
 export const ProcessInspector = Context.Reference<{
   readonly inspect: (args: ReadonlyArray<string>) => Effect.Effect<{ readonly stdout: string }, TestSpawnError>;
   readonly signal?: (pid: number, signal: "SIGSTOP" | "SIGKILL") => void;
@@ -104,7 +104,7 @@ const environment = node => {
   const env = { ...process.env };
   const ownImport = "--import=" + preload;
   const original = (env.NODE_OPTIONS || "").replaceAll(ownImport, "").trim();
-  if (node && env.${ledgerKey} === ledger && env.${tokenKey} === token) env.NODE_OPTIONS = (original + " " + ownImport).trim();
+  if ((node || process.versions.bun !== undefined) && env.${ledgerKey} === ledger && env.${tokenKey} === token) env.NODE_OPTIONS = (original + " " + ownImport).trim();
   else if (original) env.NODE_OPTIONS = original;
   else delete env.NODE_OPTIONS;
   return env;
@@ -404,13 +404,19 @@ export const acquireProcessTree = Effect.fn("ProcessTree.acquire")(function* (sc
   const existing = process.env.NODE_OPTIONS ?? "";
   const bun = process.versions.bun !== undefined;
   const inherited = runtimeArgs(process.execArgv, process.cwd(), bun);
+  const warnedRuntimeFlags = yield* WarnedRuntimeFlags;
   const dropped = [...new Set(inherited.dropped)].filter(flag => !warnedRuntimeFlags.has(flag));
   if (dropped.length) {
     for (const flag of dropped) warnedRuntimeFlags.add(flag);
     yield* Console.warn(`Warning: not forwarding runtime flags to Vitest children: ${dropped.join(", ")}`);
   }
+  // Vitest's forks pool supplies its own execArgv. BUN_OPTIONS keeps the
+  // native preload in those Bun workers; NODE_OPTIONS covers Node descendants.
+  // Bun loads the same module only once when also given the explicit preload.
   return {
-    env: { ...process.env, MUTANT_CAFE_PROCESS_PHASE: undefined, [tokenKey]: token, [ledgerKey]: ledger, [preloadKey]: url, NODE_OPTIONS: bun ? existing : `${existing} --import=${url}`.trim() },
+    env: { ...process.env, MUTANT_CAFE_PROCESS_PHASE: undefined, [tokenKey]: token, [ledgerKey]: ledger, [preloadKey]: url,
+      NODE_OPTIONS: `${existing} --import=${url}`.trim(),
+      ...(bun ? { BUN_OPTIONS: `${process.env.BUN_OPTIONS ?? ""} --preload=${url}`.trim() } : {}) },
     launchArgs: [...(bun ? ["--preload", script] : []), ...inherited.args],
     addRoot: (pid: number) => { roots.add(pid); }, cleanup, reap, trace
   };
