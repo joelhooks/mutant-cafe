@@ -56,7 +56,7 @@ it.live.skipIf(process.versions.bun === undefined)("registers a live Bun selecto
   expect(warnings).toEqual([]);
 }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)), 20_000);
 
-const ConfigProcess = Schema.fromJsonString(Schema.Struct({ pid: Schema.Int, registered: Schema.Boolean }));
+const ConfigProcess = Schema.fromJsonString(Schema.Struct({ pid: Schema.Int, registrations: Schema.Int }));
 const TraceRow = Schema.fromJsonString(Schema.Struct({
   stage: Schema.String, pid: Schema.Int, ppid: Schema.Int,
   targetPid: Schema.optional(Schema.Int), childPid: Schema.optional(Schema.Int)
@@ -71,8 +71,8 @@ for (const mode of ["preflight", "cold"] as const) it.live.skipIf(process.versio
   yield* fs.writeFileString(`${dir.path}/vitest.config.ts`, `
     import { appendFileSync, readFileSync } from "node:fs";
     const rows = readFileSync(process.env.MUTANT_CAFE_PROCESS_LEDGER, "utf8").trim().split("\\n").filter(Boolean).map(JSON.parse);
-    const registered = rows.some(row => row.pid === process.pid && row.birth);
-    appendFileSync(${JSON.stringify(configPids)}, JSON.stringify({ pid: process.pid, registered }) + "\\n");
+    const registrations = rows.filter(row => row.pid === process.pid && row.birth).length;
+    appendFileSync(${JSON.stringify(configPids)}, JSON.stringify({ pid: process.pid, registrations }) + "\\n");
     export default { test: { maxWorkers: 1, include: ["value.test.ts"] } };
   `);
   const key = "MUTANT_CAFE_PROCESS_TRACE";
@@ -90,7 +90,7 @@ for (const mode of ["preflight", "cold"] as const) it.live.skipIf(process.versio
   const coldPid = rows.find(row => row.stage === "cold-spawn")?.childPid;
   if (mode === "cold") expect(pids.has(coldPid ?? 0)).toBe(true);
   else expect(pids.size).toBe(1);
-  for (const { registered } of configured) expect(registered).toBe(true);
+  for (const { registrations } of configured) expect(registrations).toBe(1);
   for (const pid of pids) {
     expect(rows.some(row => row.stage === "ps-record-done" && row.pid === pid && row.targetPid === pid && row.ppid === process.pid)).toBe(true);
     expect(rows.some(row => row.stage === "preload-ready" && row.pid === pid)).toBe(true);
@@ -108,7 +108,9 @@ it.live.skipIf(process.versions.bun === undefined)("registers two Vitest fork wo
   );
   yield* fs.writeFileString(`${dir.path}/vitest.config.ts`, `
     import { execFileSync } from "node:child_process";
-    import { writeFileSync } from "node:fs";
+    import { readFileSync, writeFileSync } from "node:fs";
+    const ownerRows = readFileSync(process.env.MUTANT_CAFE_PROCESS_LEDGER, "utf8").trim().split("\\n").filter(Boolean).map(JSON.parse);
+    if (ownerRows.filter(row => row.pid === process.pid && row.birth).length !== 1) throw new Error("expected exactly one host ledger row");
     // A PATH-resolved Node child of the Bun Vitest host, not another Bun child.
     const descendant = execFileSync("node", ["-e", ${JSON.stringify(String.raw`
       const { readFileSync } = require("node:fs");
@@ -124,7 +126,7 @@ it.live.skipIf(process.versions.bun === undefined)("registers two Vitest fork wo
     import { it, expect } from "vitest";
     it("has an owned fork", () => {
       const rows = readFileSync(process.env.MUTANT_CAFE_PROCESS_LEDGER, "utf8").trim().split("\\n").filter(Boolean).map(JSON.parse);
-      expect(rows.some(row => row.pid === process.pid && row.birth)).toBe(true);
+      expect(rows.filter(row => row.pid === process.pid && row.birth)).toHaveLength(1);
       writeFileSync(new URL("./${name}.pid", import.meta.url), String(process.pid));
     });`);
   const baseline = yield* (yield* TestRunner).baseline(dir, undefined, 10_000);
@@ -133,7 +135,11 @@ it.live.skipIf(process.versions.bun === undefined)("registers two Vitest fork wo
   expect(new Set(pids).size).toBe(2);
   const rows = yield* Effect.forEach((yield* fs.readFileString(trace)).trim().split("\n"), line => Schema.decodeEffect(TraceRow)(line));
   const host = rows.find(row => row.stage === "cold-spawn")?.childPid;
-  expect(host).toBeGreaterThan(0);
+  if (!host) throw new Error("Missing cold host PID in trace");
+  for (const pid of [host, ...pids]) {
+    expect(rows.filter(row => row.stage === "ps-record-done" && row.targetPid === pid)).toHaveLength(1);
+    expect(rows.filter(row => row.stage === "preload-ready" && row.pid === pid)).toHaveLength(1);
+  }
   const nodePid = Number(yield* fs.readFileString(`${dir.path}/node.pid`));
   expect(pids).not.toContain(nodePid);
   for (const pid of [...pids, nodePid]) {

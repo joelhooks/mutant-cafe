@@ -74,7 +74,7 @@ export const TestRunnerLive = Layer.effect(TestRunner, Effect.gen(function* () {
     // Keep diagnostics off stdout so GitHub output is a Markdown document.
     const started = yield* Clock.currentTimeMillis;
     const owned = yield* acquireProcessTree(dir.path, onBackstop(dir.path), openedAt.get(dir.path)).pipe(Effect.provideService(FileSystem.FileSystem, fs),
-      Effect.mapError(error => new TestSpawnError({ command: [process.execPath, ...vitestArgs], message: String(error) })));
+      Effect.mapError(error => new TestSpawnError({ command: [...error.command, ...vitestArgs], message: error.message })));
     const command = [process.execPath, ...owned.launchArgs, ...vitestArgs];
     const chunks: Array<string> = [];
     let exitCode = 1;

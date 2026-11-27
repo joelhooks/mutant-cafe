@@ -24,7 +24,7 @@ const execute = promisify(execFile);
 // Warning-only recognition spans selectors and execution sessions. These paths
 // never authorize a signal: discover() still uses only its own ledger.
 const liveLedgers = new Set<string>();
-export const WarnedRuntimeFlags = Context.Reference<Set<string>>("@mutant-cafe/runner/WarnedRuntimeFlags", { defaultValue: () => new Set() });
+const warnedRuntimeFlags = new Set<string>();
 export const ProcessInspector = Context.Reference<{
   readonly inspect: (args: ReadonlyArray<string>) => Effect.Effect<{ readonly stdout: string }, TestSpawnError>;
   readonly signal?: (pid: number, signal: "SIGSTOP" | "SIGKILL") => void;
@@ -161,13 +161,20 @@ interface CleanupState {
 
 export const acquireProcessTree = Effect.fn("ProcessTree.acquire")(function* (scratch?: string, onBackstop?: (durationMs: number) => void, processesSince?: number) {
   const fs = yield* FileSystem.FileSystem;
-  const directory = yield* fs.makeTempDirectory({ prefix: "mutant-processes-" });
+  const bun = process.versions.bun !== undefined;
+  const inherited = runtimeArgs(process.execArgv, process.cwd(), bun);
+  const launchArgs = (script: string) => [...(bun ? ["--preload", script] : []), ...inherited.args];
+  const acquisitionError = (script: string) => (error: { readonly message: string }) => new TestSpawnError({
+    command: [process.execPath, ...launchArgs(script)], message: `Cannot prepare process ownership: ${error.message}`
+  });
+  const directory = yield* fs.makeTempDirectory({ prefix: "mutant-processes-" }).pipe(
+    Effect.mapError(acquisitionError("<unallocated ownership preload>")));
   const ledger = `${directory}/pids.jsonl`;
   const script = `${directory}/register.mjs`;
   const token = yield* Effect.sync(randomUUID);
   const url = pathToFileURL(script).href;
-  yield* fs.writeFileString(ledger, "");
-  yield* fs.writeFileString(script, preloadSource);
+  yield* fs.writeFileString(ledger, "").pipe(Effect.mapError(acquisitionError(script)));
+  yield* fs.writeFileString(script, preloadSource).pipe(Effect.mapError(acquisitionError(script)));
   liveLedgers.add(ledger);
   const trace = (stage: string, details: { readonly [key: string]: number | string } = {}) => {
     const destination = process.env.MUTANT_CAFE_PROCESS_TRACE;
@@ -402,9 +409,6 @@ export const acquireProcessTree = Effect.fn("ProcessTree.acquire")(function* (sc
       Effect.catch(error => Console.warn(`Warning: cannot remove process ledger directory: ${error.message}`)));
   }).pipe(Effect.ensuring(Effect.sync(() => { liveLedgers.delete(ledger); }))));
   const existing = process.env.NODE_OPTIONS ?? "";
-  const bun = process.versions.bun !== undefined;
-  const inherited = runtimeArgs(process.execArgv, process.cwd(), bun);
-  const warnedRuntimeFlags = yield* WarnedRuntimeFlags;
   const dropped = [...new Set(inherited.dropped)].filter(flag => !warnedRuntimeFlags.has(flag));
   if (dropped.length) {
     for (const flag of dropped) warnedRuntimeFlags.add(flag);
@@ -417,7 +421,7 @@ export const acquireProcessTree = Effect.fn("ProcessTree.acquire")(function* (sc
     env: { ...process.env, MUTANT_CAFE_PROCESS_PHASE: undefined, [tokenKey]: token, [ledgerKey]: ledger, [preloadKey]: url,
       NODE_OPTIONS: `${existing} --import=${url}`.trim(),
       ...(bun ? { BUN_OPTIONS: `${process.env.BUN_OPTIONS ?? ""} --preload=${url}`.trim() } : {}) },
-    launchArgs: [...(bun ? ["--preload", script] : []), ...inherited.args],
+    launchArgs: launchArgs(script),
     addRoot: (pid: number) => { roots.add(pid); }, cleanup, reap, trace
   };
 });

@@ -154,7 +154,9 @@ it.live("prints TypeScript diagnostics and a failed baseline command, retaining 
   yield* fs.writeFileString(`${root}/tsconfig.json`, JSON.stringify({ compilerOptions: { target: "ESNext", module: "NodeNext", moduleResolution: "NodeNext", allowImportingTsExtensions: true, noEmit: true }, include: ["account.ts"] }));
   yield* fs.writeFileString(`${root}/broken.test.ts`, 'import { it, expect } from "vitest"; import { isEmpty } from "./account.ts"; it("broken original", () => expect(isEmpty()).toBe(false));');
   const invoke = (args: string[]) => Effect.gen(function* () {
-    const handle = yield* ChildProcess.make(process.execPath, [path.resolve(import.meta.dirname, "../src/bin.ts"), ...args], { cwd: root });
+    const handle = yield* ChildProcess.make(process.execPath, [path.resolve(import.meta.dirname, "../src/bin.ts"), ...args], {
+      cwd: root, env: { ...process.env, BUN_OPTIONS: undefined, NODE_OPTIONS: undefined }
+    });
     const [logs, code] = yield* Effect.all([Stream.mkString(Stream.decodeText(handle.all)), handle.exitCode], { concurrency: "unbounded" });
     return { logs, code: Number(code) };
   });

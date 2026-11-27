@@ -6,8 +6,9 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
 import { TestRunnerLive } from "../src/TestRunner.ts";
-import { ProcessInspector, WarnedRuntimeFlags } from "../src/ProcessTree.ts";
+import { ProcessInspector } from "../src/ProcessTree.ts";
 import { preflight } from "../src/Preflight.ts";
 import { openWarmRunner } from "../src/WarmRunner.ts";
 
@@ -160,7 +161,7 @@ it.live("drops debug, test, watch and eval modes without forwarding the eval ope
   const warn = (...args: ReadonlyArray<unknown>) => { warnings.push(args.join(" ")); };
   const [baseline] = yield* Effect.gen(function* () {
     return [yield* runner.baseline(dir, undefined, 5000), yield* runner.baseline(dir, undefined, 5000)];
-  }).pipe(Effect.provideService(Console.Console, { ...original, warn }), Effect.provideService(WarnedRuntimeFlags, new Set()));
+  }).pipe(Effect.provideService(Console.Console, { ...original, warn }));
   expect(warnings).toHaveLength(1);
   expect(Object.keys(baseline?.testDurations ?? {})).toHaveLength(1);
   expect(baseline?.testCommand.filter(arg => /inspect|^--test$|^--watch$|^-e$|not-an-option/.test(arg))).toEqual([]);
@@ -168,6 +169,32 @@ it.live("drops debug, test, watch and eval modes without forwarding the eval ope
   for (const flag of ["--inspect-brk", "--test", "--watch", "-e"]) expect(warning).toContain(flag);
   expect(warning).not.toContain("not-an-option");
 }).pipe(Effect.scoped, Effect.provide(TestRunnerLive), Effect.provide(NodeServices.layer)), 15_000);
+
+it.live("reports the planned cold argv when the ownership script cannot be written", () => Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const dir = yield* fixture;
+  const ownership = `${dir.path}/mutant-processes-test`;
+  yield* fs.makeDirectory(ownership);
+  const script = `${ownership}/register.mjs`;
+  const tracked: FileSystem.FileSystem = { ...fs,
+    makeTempDirectory: options => options?.prefix === "mutant-processes-" ? Effect.succeed(ownership) : fs.makeTempDirectory(options),
+    writeFileString: (file, text, options) => file !== script ? fs.writeFileString(file, text, options) :
+      Effect.fail(new PlatformError.PlatformError(new PlatformError.SystemError({ _tag: "PermissionDenied", module: "FileSystem", method: "writeFileString", pathOrDescriptor: file })))
+  };
+  const previous = process.execArgv;
+  yield* Effect.acquireRelease(
+    Effect.sync(() => { process.execArgv = ["--conditions=source"]; }),
+    () => Effect.sync(() => { process.execArgv = previous; })
+  );
+  const failure = yield* Effect.gen(function* () {
+    return yield* (yield* TestRunner).runRelated(dir, "value.ts", 5000).pipe(Effect.flip);
+  }).pipe(Effect.provide(TestRunnerLive), Effect.provideService(FileSystem.FileSystem, tracked));
+  expect(failure.message).toContain("Cannot prepare process ownership");
+  expect(failure.command).toEqual([process.execPath, ...(process.versions.bun ? ["--preload", script] : []), "--conditions=source",
+    expect.stringMatching(/\/mutant-vitest-[^/]+\/launch\.mjs$/), "related", "value.ts", "--run", "--passWithNoTests",
+    "--reporter=default", expect.stringMatching(/^--reporter=.*\/reporter\.mjs$/), "--bail", "1", "--testTimeout", "2500",
+    "--hookTimeout", "2500", "--no-cache", "--no-fsModuleCache"]);
+}).pipe(Effect.scoped, Effect.provide(NodeServices.layer)), 15_000);
 
 it("names Vitest after runtime flags without hiding them from the physical argv", () => {
   const command = ["/node", "--conditions=source", "--no-warnings", "/tmp/mutant-vitest-example/launch.mjs", "run", "--reporter=default", "--reporter=/tmp/reporter.mjs"];

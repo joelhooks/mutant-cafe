@@ -12,7 +12,10 @@ for (const mode of ["cold", "warm"] as const) it.live(`forwards conditions from 
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const root = yield* fs.makeTempDirectoryScoped({ prefix: "mutant-cli-runtime-" }).pipe(Effect.flatMap(fs.realPath));
-  yield* fs.symlink(path.resolve(import.meta.dirname, "../../../fixtures/tagged-errors/node_modules"), `${root}/node_modules`);
+  yield* fs.makeDirectory(`${root}/node_modules/mc-test-preload`, { recursive: true });
+  yield* fs.symlink(path.resolve(import.meta.dirname, "../../../fixtures/tagged-errors/node_modules/vitest"), `${root}/node_modules/vitest`);
+  yield* fs.writeFileString(`${root}/node_modules/mc-test-preload/package.json`, '{"name":"mc-test-preload","type":"module","exports":"./index.mjs"}');
+  yield* fs.writeFileString(`${root}/node_modules/mc-test-preload/index.mjs`, 'process.env.MC_BARE_PID = String(process.pid);');
   yield* fs.writeFileString(`${root}/package.json`, JSON.stringify({ type: "module", scripts: { test: "vitest run" },
     imports: { "#choice": { "mutant-cafe-source": "./custom.cjs", default: "./default.cjs" } } }));
   yield* fs.writeFileString(`${root}/custom.cjs`, 'module.exports = "custom";');
@@ -25,14 +28,22 @@ for (const mode of ["cold", "warm"] as const) it.live(`forwards conditions from 
     import { createRequire } from "node:module";
     const choice = createRequire(import.meta.url)("#choice");
     if (choice !== "custom") throw new Error("missing runtime condition: " + choice);
-    if (process.env.MC_RUNTIME_PID !== String(process.pid)) throw new Error("missing runtime preload");
+    if (process.env.MC_RUNTIME_PID !== String(process.pid)) throw new Error("missing relative runtime preload");
+    if (process.env.MC_BARE_PID !== String(process.pid)) throw new Error("missing package-name runtime preload");
     export default { test: { maxWorkers: 1 } };`);
 
   const bun = process.versions.bun !== undefined;
   const bin = path.resolve(import.meta.dirname, "../src/bin.ts");
-  const cli = yield* ChildProcess.make(process.execPath, ["--conditions=mutant-cafe-source",
-    bun ? "--preload" : "--import", "./setup.mjs", bin, `--${mode}`, "--jobs", "1"], { cwd: root });
-  const [output, exit] = yield* Effect.all([Stream.mkString(Stream.decodeText(cli.all)), cli.exitCode], { concurrency: "unbounded" });
+  // Choosing an inspector port without enabling the inspector is safe and
+  // still presents a flag the CLI should warn about exactly once per process.
+  const cli = yield* ChildProcess.make(process.execPath, ["--inspect-port=0", "--conditions=mutant-cafe-source",
+    bun ? "--preload" : "--import", "./setup.mjs", "--import", "mc-test-preload", bin, `--${mode}`, "--jobs", "1"],
+    { cwd: root, env: { ...process.env, BUN_OPTIONS: undefined, NODE_OPTIONS: undefined } });
+  const [stdout, stderr, exit] = yield* Effect.all([Stream.mkString(Stream.decodeText(cli.stdout)), Stream.mkString(Stream.decodeText(cli.stderr)), cli.exitCode], { concurrency: "unbounded" });
+  const output = stderr + stdout;
+  const warning = "Warning: not forwarding runtime flags to Vitest children: --inspect-port";
+  expect(stderr.split("\n").filter(line => line.includes(warning))).toHaveLength(1);
+  expect(stdout).not.toContain(warning);
   expect(Number(exit), output).toBe(2);
   expect(output).not.toContain("Cannot verify Vitest resolved selection");
   const report = yield* Schema.decodeEffect(Schema.fromJsonString(RunReport))(yield* fs.readFileString(`${root}/mutants.out/outcomes.json`));
