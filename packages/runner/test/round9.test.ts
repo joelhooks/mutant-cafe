@@ -5,6 +5,7 @@ import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import * as Path from "effect/Path";
 import { TestRunnerLive } from "../src/TestRunner.ts";
 import { ProcessInspector } from "../src/ProcessTree.ts";
 import { preflight } from "../src/Preflight.ts";
@@ -103,6 +104,66 @@ it("names Vitest and preserves the exact physical launcher argv in diagnostics",
   expect(formatTestCommand(argv)).toBe(`vitest run --passWithNoTests --reporter=default --bail 1 (via ${argv.join(" ")})`);
   expect(formatTestCommand(["vitest", "run"])).toBe("vitest run");
 });
+
+for (const mode of ["cold", "warm", "preflight"] as const) it.live(`preserves resolution flags in the ${mode} launch`, () => Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const dir = yield* fixture;
+  const originalCwdInput = yield* fs.makeTempDirectoryScoped({ prefix: "runtime-flag-input-" });
+  const relative = (name: string) => {
+    const input = path.relative(process.cwd(), path.join(originalCwdInput, name));
+    return input.startsWith(".") ? input : `./${input}`;
+  };
+  yield* fs.writeFileString(`${originalCwdInput}/import.mjs`, 'process.env.MUTANT_FLAG_IMPORT = "esm";');
+  yield* fs.writeFileString(`${originalCwdInput}/require.cjs`, 'process.env.MUTANT_FLAG_REQUIRE = "cjs";');
+  yield* fs.writeFileString(`${dir.path}/package.json`, JSON.stringify({
+    type: "module", scripts: { test: "vitest run" },
+    imports: { "#choice": { "mutant-cafe-source": "./source.json", default: "./default.json" } }
+  }));
+  yield* fs.writeFileString(`${dir.path}/source.json`, '{"mode":"source"}');
+  yield* fs.writeFileString(`${dir.path}/default.json`, '{"mode":"default"}');
+  yield* fs.writeFileString(`${dir.path}/vitest.config.ts`, `
+    const require = process.getBuiltinModule("node:module").createRequire(import.meta.url);
+    process.getBuiltinModule("node:fs").writeFileSync(new URL("./runtime-choice", import.meta.url), JSON.stringify({
+      mode: require("#choice").mode, imported: process.env.MUTANT_FLAG_IMPORT, required: process.env.MUTANT_FLAG_REQUIRE
+    }));
+    export default { test: { maxWorkers: 1, include: ["value.test.ts"] } };`);
+  const previous = process.execArgv;
+  const condition = mode === "warm" ? ["-C", "mutant-cafe-source"] : ["--conditions=mutant-cafe-source"];
+  yield* Effect.acquireRelease(
+    Effect.sync(() => { process.execArgv = [...condition, "--import", relative("import.mjs"), `--require=${relative("require.cjs")}`]; }),
+    () => Effect.sync(() => { process.execArgv = previous; })
+  );
+  if (mode === "cold") {
+    const baseline = yield* (yield* TestRunner).baseline(dir);
+    expect(baseline.testCommand.join(" ")).toContain("--conditions");
+    expect(baseline.testCommand.join(" ")).toContain(originalCwdInput);
+  } else if (mode === "warm") {
+    const warm = yield* openWarmRunner(dir, () => {});
+    expect((yield* warm.run(undefined, 5000))?.status).toBe("passed");
+  } else {
+    expect(yield* preflight(dir.path, undefined, 5000)).toEqual([]);
+  }
+  expect(yield* fs.readFileString(`${dir.path}/runtime-choice`)).toBe('{"mode":"source","imported":"esm","required":"cjs"}');
+}).pipe(Effect.scoped, Effect.provide(TestRunnerLive), Effect.provide(NodeServices.layer)), 20_000);
+
+it.live("drops debug, test, watch and eval modes without forwarding the eval operand", () => Effect.gen(function* () {
+  const dir = yield* fixture;
+  const original = yield* Console.Console;
+  const warnings: string[] = [];
+  const previous = process.execArgv;
+  yield* Effect.acquireRelease(
+    Effect.sync(() => { process.execArgv = ["--inspect-brk", "--test", "--watch", "-e", "--conditions=not-an-option"]; }),
+    () => Effect.sync(() => { process.execArgv = previous; })
+  );
+  const baseline = yield* (yield* TestRunner).baseline(dir, undefined, 5000).pipe(
+    Effect.provideService(Console.Console, { ...original, warn: (...args: ReadonlyArray<unknown>) => { warnings.push(args.join(" ")); } }));
+  expect(Object.keys(baseline.testDurations ?? {})).toHaveLength(1);
+  expect(baseline.testCommand.filter(arg => /inspect|^--test$|^--watch$|^-e$|not-an-option/.test(arg))).toEqual([]);
+  const warning = warnings.join("\n");
+  for (const flag of ["--inspect-brk", "--test", "--watch", "-e"]) expect(warning).toContain(flag);
+  expect(warning).not.toContain("not-an-option");
+}).pipe(Effect.scoped, Effect.provide(TestRunnerLive), Effect.provide(NodeServices.layer)), 15_000);
 
 it("names Vitest after runtime flags without hiding them from the physical argv", () => {
   const command = ["/node", "--conditions=source", "--no-warnings", "/tmp/mutant-vitest-example/launch.mjs", "run", "--reporter=default", "--reporter=/tmp/reporter.mjs"];

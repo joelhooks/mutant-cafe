@@ -2,6 +2,7 @@ import { TestSpawnError } from "@mutant-cafe/core";
 import { createEffectActor, createEffectLogic, join, send, setupEffect } from "@xstate/effect";
 import { types } from "xstate";
 import { processTraceSource } from "./ProcessTrace.ts";
+import { runtimeArgs } from "./RuntimeArgs.ts";
 import * as Console from "effect/Console";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -23,6 +24,7 @@ const execute = promisify(execFile);
 // Warning-only recognition spans selectors and execution sessions. These paths
 // never authorize a signal: discover() still uses only its own ledger.
 const liveLedgers = new Set<string>();
+const warnedRuntimeFlags = new Set<string>();
 export const ProcessInspector = Context.Reference<{
   readonly inspect: (args: ReadonlyArray<string>) => Effect.Effect<{ readonly stdout: string }, TestSpawnError>;
   readonly signal?: (pid: number, signal: "SIGSTOP" | "SIGKILL") => void;
@@ -401,9 +403,15 @@ export const acquireProcessTree = Effect.fn("ProcessTree.acquire")(function* (sc
   }).pipe(Effect.ensuring(Effect.sync(() => { liveLedgers.delete(ledger); }))));
   const existing = process.env.NODE_OPTIONS ?? "";
   const bun = process.versions.bun !== undefined;
+  const inherited = runtimeArgs(process.execArgv, process.cwd(), bun);
+  const dropped = [...new Set(inherited.dropped)].filter(flag => !warnedRuntimeFlags.has(flag));
+  if (dropped.length) {
+    for (const flag of dropped) warnedRuntimeFlags.add(flag);
+    yield* Console.warn(`Warning: not forwarding runtime flags to Vitest children: ${dropped.join(", ")}`);
+  }
   return {
     env: { ...process.env, MUTANT_CAFE_PROCESS_PHASE: undefined, [tokenKey]: token, [ledgerKey]: ledger, [preloadKey]: url, NODE_OPTIONS: bun ? existing : `${existing} --import=${url}`.trim() },
-    preloadArgs: bun ? ["--preload", script] : [],
+    launchArgs: [...(bun ? ["--preload", script] : []), ...inherited.args],
     addRoot: (pid: number) => { roots.add(pid); }, cleanup, reap, trace
   };
 });
