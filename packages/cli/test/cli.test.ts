@@ -154,7 +154,9 @@ it.live("prints TypeScript diagnostics and a failed baseline command, retaining 
   yield* fs.writeFileString(`${root}/tsconfig.json`, JSON.stringify({ compilerOptions: { target: "ESNext", module: "NodeNext", moduleResolution: "NodeNext", allowImportingTsExtensions: true, noEmit: true }, include: ["account.ts"] }));
   yield* fs.writeFileString(`${root}/broken.test.ts`, 'import { it, expect } from "vitest"; import { isEmpty } from "./account.ts"; it("broken original", () => expect(isEmpty()).toBe(false));');
   const invoke = (args: string[]) => Effect.gen(function* () {
-    const handle = yield* ChildProcess.make(process.execPath, [path.resolve(import.meta.dirname, "../src/bin.ts"), ...args], { cwd: root });
+    const handle = yield* ChildProcess.make(process.execPath, [path.resolve(import.meta.dirname, "../src/bin.ts"), ...args], {
+      cwd: root, env: { ...process.env, BUN_OPTIONS: undefined, NODE_OPTIONS: undefined }
+    });
     const [logs, code] = yield* Effect.all([Stream.mkString(Stream.decodeText(handle.all)), handle.exitCode], { concurrency: "unbounded" });
     return { logs, code: Number(code) };
   });
@@ -166,9 +168,16 @@ it.live("prints TypeScript diagnostics and a failed baseline command, retaining 
   const report = yield* Schema.decodeEffect(Schema.fromJsonString(RunReport))(yield* fs.readFileString(`${root}/mutants.out/outcomes.json`));
   expect(report.failure).toContain("launch.mjs run");
   expect(report.failure).toContain("broken original");
-  const launcher = report.baseline.testCommand[1]!;
-  expect(launcher).toMatch(/\/mutant-vitest-[^/]+\/launch\.mjs$/);
-  expect(report.baseline.testCommand).toEqual([process.execPath, launcher, "run", "--passWithNoTests", "--reporter=default",
+  const command = report.baseline.testCommand;
+  const launcher = command.find(arg => /\/mutant-vitest-[^/]+\/launch\.mjs$/.test(arg));
+  if (!launcher) throw new Error(`Missing Vitest launcher in ${JSON.stringify(command)}`);
+  const runtimeArgs = command.slice(1, command.indexOf(launcher));
+  if (process.versions.bun !== undefined) {
+    expect(runtimeArgs).toEqual(["--preload", expect.stringMatching(/\/mutant-processes-[^/]+\/register\.mjs$/)]);
+  } else {
+    expect(runtimeArgs).toEqual([]);
+  }
+  expect(command).toEqual([process.execPath, ...runtimeArgs, launcher, "run", "--passWithNoTests", "--reporter=default",
     `--reporter=${path.join(path.dirname(launcher), "reporter.mjs")}`, "--bail", "1", "--no-cache", "--no-fsModuleCache"]);
   expect(failed.logs).toContain(report.baseline.testCommand.join(" "));
   yield* fs.writeFileString(`${root}/account.ts`, "export const broken = (;");

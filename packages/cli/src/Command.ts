@@ -186,7 +186,7 @@ export const runCli = Effect.fn("runCli")(function*(options: {
 }) {
   const code = yield* Ref.make(0);
   const command = makeCommand({ ...options, onExit: (value) => Ref.set(code, value) });
-  yield* Command.runWith(command, { version: "0.1.7" })(options.args).pipe(
+  yield* Command.runWith(command, { version: "0.1.8" })(options.args).pipe(
     Effect.catch((error) => Effect.gen(function*() {
       yield* Console.error(error._tag === "ProgramLoadError" ? `${error.tsconfig}:\n${error.diagnostics.join("\n")}`
         : error._tag === "TestSpawnError" && error.kind === "vitest-version" ? error.message

@@ -2,6 +2,7 @@ import { TestSpawnError } from "@mutant-cafe/core";
 import { createEffectActor, createEffectLogic, join, send, setupEffect } from "@xstate/effect";
 import { types } from "xstate";
 import { processTraceSource } from "./ProcessTrace.ts";
+import { runtimeArgs } from "./RuntimeArgs.ts";
 import * as Console from "effect/Console";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -23,6 +24,7 @@ const execute = promisify(execFile);
 // Warning-only recognition spans selectors and execution sessions. These paths
 // never authorize a signal: discover() still uses only its own ledger.
 const liveLedgers = new Set<string>();
+const warnedRuntimeFlags = new Set<string>();
 export const ProcessInspector = Context.Reference<{
   readonly inspect: (args: ReadonlyArray<string>) => Effect.Effect<{ readonly stdout: string }, TestSpawnError>;
   readonly signal?: (pid: number, signal: "SIGSTOP" | "SIGKILL") => void;
@@ -102,7 +104,7 @@ const environment = node => {
   const env = { ...process.env };
   const ownImport = "--import=" + preload;
   const original = (env.NODE_OPTIONS || "").replaceAll(ownImport, "").trim();
-  if (node && env.${ledgerKey} === ledger && env.${tokenKey} === token) env.NODE_OPTIONS = (original + " " + ownImport).trim();
+  if ((node || process.versions.bun !== undefined) && env.${ledgerKey} === ledger && env.${tokenKey} === token) env.NODE_OPTIONS = (original + " " + ownImport).trim();
   else if (original) env.NODE_OPTIONS = original;
   else delete env.NODE_OPTIONS;
   return env;
@@ -159,13 +161,20 @@ interface CleanupState {
 
 export const acquireProcessTree = Effect.fn("ProcessTree.acquire")(function* (scratch?: string, onBackstop?: (durationMs: number) => void, processesSince?: number) {
   const fs = yield* FileSystem.FileSystem;
-  const directory = yield* fs.makeTempDirectory({ prefix: "mutant-processes-" });
+  const bun = process.versions.bun !== undefined;
+  const inherited = runtimeArgs(process.execArgv, process.cwd(), bun);
+  const launchArgs = (script: string) => [...(bun ? ["--preload", script] : []), ...inherited.args];
+  const acquisitionError = (script: string) => (error: { readonly message: string }) => new TestSpawnError({
+    command: [process.execPath, ...launchArgs(script)], message: `Cannot prepare process ownership: ${error.message}`
+  });
+  const directory = yield* fs.makeTempDirectory({ prefix: "mutant-processes-" }).pipe(
+    Effect.mapError(acquisitionError("<unallocated ownership preload>")));
   const ledger = `${directory}/pids.jsonl`;
   const script = `${directory}/register.mjs`;
   const token = yield* Effect.sync(randomUUID);
   const url = pathToFileURL(script).href;
-  yield* fs.writeFileString(ledger, "");
-  yield* fs.writeFileString(script, preloadSource);
+  yield* fs.writeFileString(ledger, "").pipe(Effect.mapError(acquisitionError(script)));
+  yield* fs.writeFileString(script, preloadSource).pipe(Effect.mapError(acquisitionError(script)));
   liveLedgers.add(ledger);
   const trace = (stage: string, details: { readonly [key: string]: number | string } = {}) => {
     const destination = process.env.MUTANT_CAFE_PROCESS_TRACE;
@@ -400,8 +409,19 @@ export const acquireProcessTree = Effect.fn("ProcessTree.acquire")(function* (sc
       Effect.catch(error => Console.warn(`Warning: cannot remove process ledger directory: ${error.message}`)));
   }).pipe(Effect.ensuring(Effect.sync(() => { liveLedgers.delete(ledger); }))));
   const existing = process.env.NODE_OPTIONS ?? "";
+  const dropped = [...new Set(inherited.dropped)].filter(flag => !warnedRuntimeFlags.has(flag));
+  if (dropped.length) {
+    for (const flag of dropped) warnedRuntimeFlags.add(flag);
+    yield* Console.warn(`Warning: not forwarding runtime flags to Vitest children: ${dropped.join(", ")}`);
+  }
+  // Vitest's forks pool supplies its own execArgv. BUN_OPTIONS keeps the
+  // native preload in those Bun workers; NODE_OPTIONS covers Node descendants.
+  // Bun loads the same module only once when also given the explicit preload.
   return {
-    env: { ...process.env, MUTANT_CAFE_PROCESS_PHASE: undefined, [tokenKey]: token, [ledgerKey]: ledger, [preloadKey]: url, NODE_OPTIONS: `${existing} --import=${url}`.trim() },
+    env: { ...process.env, MUTANT_CAFE_PROCESS_PHASE: undefined, [tokenKey]: token, [ledgerKey]: ledger, [preloadKey]: url,
+      NODE_OPTIONS: `${existing} --import=${url}`.trim(),
+      ...(bun ? { BUN_OPTIONS: `${process.env.BUN_OPTIONS ?? ""} --preload=${url}`.trim() } : {}) },
+    launchArgs: launchArgs(script),
     addRoot: (pid: number) => { roots.add(pid); }, cleanup, reap, trace
   };
 });
