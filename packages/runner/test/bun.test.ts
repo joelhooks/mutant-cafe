@@ -84,9 +84,9 @@ for (const mode of ["preflight", "cold"] as const) it.live.skipIf(process.versio
   if (mode === "preflight") expect(yield* preflight(dir.path, undefined, 5000)).toEqual([]);
   else expect(Object.keys((yield* (yield* TestRunner).baseline(dir, undefined, 5000)).testDurations ?? {})).toHaveLength(1);
 
-  const configured = yield* Effect.forEach((yield* fs.readFileString(configPids)).trim().split("\n"), Schema.decodeEffect(ConfigProcess));
+  const configured = yield* Effect.forEach((yield* fs.readFileString(configPids)).trim().split("\n"), line => Schema.decodeEffect(ConfigProcess)(line));
   const pids = new Set(configured.map(row => row.pid));
-  const rows = yield* Effect.forEach((yield* fs.readFileString(trace)).trim().split("\n"), Schema.decodeEffect(TraceRow));
+  const rows = yield* Effect.forEach((yield* fs.readFileString(trace)).trim().split("\n"), line => Schema.decodeEffect(TraceRow)(line));
   const coldPid = rows.find(row => row.stage === "cold-spawn")?.childPid;
   if (mode === "cold") expect(pids.has(coldPid ?? 0)).toBe(true);
   else expect(pids.size).toBe(1);
