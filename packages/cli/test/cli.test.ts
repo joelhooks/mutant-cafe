@@ -1,6 +1,6 @@
 import { it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { BaselineFailed, BaselineTimedOut, MutantSource, Reporter, Scratch, TestRunner, RunReport, type Mutant, type NotMutated } from "@mutant-cafe/core";
+import { BaselineFailed, BaselineTimedOut, DuplicateMutantId, MutantSource, Reporter, Scratch, TestRunner, RunReport, type Mutant, type NotMutated } from "@mutant-cafe/core";
 import * as Effect from "effect/Effect";
 import * as Console from "effect/Console";
 import * as Result from "effect/Result";
@@ -55,6 +55,32 @@ const project = Effect.gen(function*() {
   yield* fs.writeFileString(`${root}/account.ts`, "export const isEmpty = () => true;\n");
   return root;
 });
+
+it.live("reports both sites for a duplicate ID and exits 9 even in advisory mode", () => Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const root = yield* project;
+  const terminal = yield* Console.Console;
+  const errors: (readonly unknown[])[] = [];
+  const collision = new DuplicateMutantId({ id: "collision",
+    first: { file: "src/first.ts", functionName: "first", genre: "BooleanFlip", line: 12 },
+    second: { file: "src/second.ts", functionName: "second", genre: "EffectDie", line: 34 },
+  });
+  const code = yield* runCli({ root, args: ["--advisory"], run: () => Effect.die("Unexpected mutation run") }).pipe(
+    Effect.provideService(MutantSource, { generate: () => Stream.fail(collision),
+      notMutated: () => Effect.die("Unexpected skip collection"), checkViable: () => Effect.die("Unexpected viability check") }),
+    Effect.provideService(Scratch, { acquire: () => Effect.die("Unexpected scratch acquisition") }),
+    Effect.provideService(TestRunner, { baseline: () => Effect.die("Unexpected baseline"), runRelated: () => Effect.die("Unexpected test spawn") }),
+    Effect.provideService(Console.Console, { ...terminal, error: (...args) => { errors.push(args); } }),
+  );
+  expect(code).toBe(9);
+  expect(errors).toHaveLength(1);
+  const message = errors[0]?.join(" ");
+  expect(message).toContain("Duplicate mutant ID collision");
+  expect(message).toContain("src/first.ts:12 (first, BooleanFlip)");
+  expect(message).toContain("src/second.ts:34 (second, EffectDie)");
+  expect(message).toContain("report this as a bug");
+  expect(yield* fs.exists(`${root}/mutants.out`)).toBe(false);
+}).pipe(Effect.scoped, Effect.provide(NodeServices.layer)));
 
 it.live("the real CLI reports three distinct missed mutants with root-relative clickable paths", () => Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
@@ -243,7 +269,7 @@ it.effect("gives unreliable its own exit code and publishes only report schema v
   expect(yield* invoke(root, [], [mutant()], () => Effect.succeed(unreliable))).toBe(7);
   expect(yield* Schema.decodeUnknownEffect(RunReport)({ ...base, schemaVersion: 1 }).pipe(Effect.result, Effect.map(Result.isFailure))).toBe(true);
   const legacyJson = JSON.stringify(base);
-  expect(legacyJson).not.toMatch(/"(?:idEpoch|toolVersion)"\s*:/);
+  expect(legacyJson).not.toMatch(/"(?:idEpoch|toolVersion|typescriptVersion)"\s*:/);
   expect(yield* Schema.decodeEffect(Schema.fromJsonString(RunReport))(legacyJson)).toEqual(base);
 }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)));
 

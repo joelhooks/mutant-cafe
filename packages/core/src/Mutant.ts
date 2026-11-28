@@ -117,9 +117,13 @@ export type SelectionCounts = typeof SelectionCounts.Type;
 
 // Missing metadata denotes a legacy report. Never compare IDs across epochs.
 export const reportIdentity = { idEpoch: 1, toolVersion: manifest.version } as const;
+export const reportMetadata = (typescriptVersion?: string) => ({
+  ...reportIdentity, ...(typescriptVersion === undefined ? {} : { typescriptVersion }),
+});
 const reportIdentityFields = {
   idEpoch: Schema.optional(Schema.Int),
   toolVersion: Schema.optional(Schema.String),
+  typescriptVersion: Schema.optional(Schema.String),
 };
 
 export const MutantList = Schema.Struct({

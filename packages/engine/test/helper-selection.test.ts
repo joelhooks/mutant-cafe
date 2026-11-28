@@ -22,7 +22,15 @@ it("honors explicit fake and workload globs under test directories", () => {
   const selected = makeTypeScriptOracle().discover({ ...config, explicitIncludes: true, include: [
     "src/**/*.ts", "tests/**/*.fake.ts", "tests/**/*.workload.ts", "test/**/*.fake.ts", "test/**/*.workload.ts"
   ] });
-  expect(selected.functions.map(fn => fn.name).sort()).toEqual(["fake", "production", "singularFake", "singularWorkload", "workload"]);
+  expect(selected.functions.map(fn => fn.name).sort()).toEqual(["fake", "nestedMock", "nestedTestHelper", "production", "singularFake", "singularWorkload", "workload"]);
+});
+
+it("opts nested support folders in through a production glob and lets excludes opt them back out", () => {
+  const explicit = { ...config, explicitIncludes: true, include: ["src/**/*.ts"] };
+  const selected = makeTypeScriptOracle().discover(explicit);
+  expect(selected.functions.map(fn => fn.name).sort()).toEqual(["nestedMock", "nestedTestHelper", "production"]);
+  const excluded = makeTypeScriptOracle().discover({ ...explicit, exclude: ["**/{test,tests,__tests__,__mocks__}/**"] });
+  expect(excluded.functions.map(fn => fn.name)).toEqual(["production"]);
 });
 
 it.each([
@@ -37,5 +45,5 @@ it.each([
 
 it("still excludes declarations, test and spec assertion files with broad explicit includes", () => {
   const selected = makeTypeScriptOracle().discover({ ...config, include: ["**/*.ts"], explicitIncludes: true });
-  expect(selected.functions.map(fn => fn.name).sort()).toEqual(["fake", "internalTestHelper", "mockHelper", "production", "singularFake", "singularWorkload", "workload"]);
+  expect(selected.functions.map(fn => fn.name).sort()).toEqual(["fake", "internalTestHelper", "mockHelper", "nestedMock", "nestedTestHelper", "production", "singularFake", "singularWorkload", "workload"]);
 });

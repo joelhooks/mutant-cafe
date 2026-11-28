@@ -1,4 +1,4 @@
-import { reportIdentity, excludeLinkedCandidates, DEFAULT_BASELINE_TIMEOUT_MS, formatTestCommand, ConfigFile, MutantList, MutantSource, Reporter, RunConfig, type BaselineFailed, type BaselineTimedOut, type Mutant, type ProgramLoadError, ReportWriteError, type RunReport, Scratch, type ScratchError, type TestRunner, type TestSpawnError } from "@mutant-cafe/core";
+import { reportIdentity, reportMetadata, excludeLinkedCandidates, DEFAULT_BASELINE_TIMEOUT_MS, formatTestCommand, ConfigFile, MutantList, MutantSource, Reporter, RunConfig, type BaselineFailed, type BaselineTimedOut, type Mutant, type GenerationError, ReportWriteError, type RunReport, Scratch, type ScratchError, type TestRunner, type TestSpawnError } from "@mutant-cafe/core";
 import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -18,7 +18,7 @@ import { git, repositoryRoot, UsageError } from "./Git.ts";
 export { UsageError } from "./Git.ts";
 
 export type Run = (config: RunConfig, mutants: ReadonlyArray<Mutant>) => Effect.Effect<RunReport,
-  BaselineFailed | BaselineTimedOut | ScratchError | TestSpawnError | ProgramLoadError | ReportWriteError,
+  BaselineFailed | BaselineTimedOut | ScratchError | TestSpawnError | GenerationError | ReportWriteError,
   MutantSource | Scratch | TestRunner | Reporter | Path.Path>;
 
 const flags = {
@@ -96,8 +96,9 @@ export const makeCommand = (options: {
     return yield* new UsageError({ message: "Jobs and timeout values must be positive" });
   }
   const source = yield* MutantSource;
+  const metadata = reportMetadata(source.typescriptVersion);
   const generated = yield* Stream.runCollect(source.generate(config)).pipe(
-    Effect.mapError((error) => error.reason === "selection"
+    Effect.mapError((error) => error._tag === "ProgramLoadError" && error.reason === "selection"
       ? new UsageError({ message: error.diagnostics.join("\n") }) : error)
   );
   const skipped = yield* source.notMutated(config);
@@ -125,7 +126,7 @@ export const makeCommand = (options: {
   } : undefined;
   if (input.list && markdown !== undefined) {
     const text = markdownSummary({ ...markdown, root, path, notMutated: notMutated.length,
-      report: { ...reportIdentity, schemaVersion: 2, tool: "mutant.cafe", root, baseline: { durationMs: 0, testCommand: [] }, timeoutMs: 0, results: [], ...counts } });
+      report: { ...metadata, schemaVersion: 2, tool: "mutant.cafe", root, baseline: { durationMs: 0, testCommand: [] }, timeoutMs: 0, results: [], ...counts } });
     for (const file of new Set(markdown.files)) yield* fs.writeFileString(file, text).pipe(
       Effect.mapError(error => new ReportWriteError({ path: file, message: String(error) })));
     if (markdown.stdout) {
@@ -135,7 +136,7 @@ export const makeCommand = (options: {
     }
   }
   if (input.list && input.format === "json") {
-    yield* Console.log(yield* Schema.encodeEffect(Schema.fromJsonString(MutantList))({ ...reportIdentity, schemaVersion: 2, tool: "mutant.cafe", mutants, notMutated, counts }));
+    yield* Console.log(yield* Schema.encodeEffect(Schema.fromJsonString(MutantList))({ ...metadata, schemaVersion: 2, tool: "mutant.cafe", mutants, notMutated, counts }));
     if (options.onExit !== undefined) yield* options.onExit(0);
     return;
   }
@@ -154,11 +155,11 @@ export const makeCommand = (options: {
   const reporter = yield* makeReporter({ root, outDir: config.outDir, mutants, notMutated, selected: counts.selected, budgetSkipped: counts.budgetSkipped, ...(markdown === undefined ? {} : { markdown }) });
   // Selection is final here: no scratch tree or test process can add information when it is empty.
   const report = yield* (mutants.length === 0
-    ? Effect.succeed<RunReport>({ ...reportIdentity, schemaVersion: 2, tool: "mutant.cafe", root,
+    ? Effect.succeed<RunReport>({ ...metadata, schemaVersion: 2, tool: "mutant.cafe", root,
       baseline: { durationMs: 0, testCommand: [] }, timeoutMs: 0, results: [] })
     : options.run(config, mutants)).pipe(Effect.provideService(Reporter, reporter),
     Effect.catchTag("BaselineFailed", error => Effect.gen(function*() {
-      const failed: RunReport = { ...reportIdentity, schemaVersion: 2, tool: "mutant.cafe", root,
+      const failed: RunReport = { ...metadata, schemaVersion: 2, tool: "mutant.cafe", root,
         baseline: { durationMs: 0, testCommand: error.command }, timeoutMs: config.timeoutMs ?? config.minimumTimeoutMs, results: [],
         failure: `BaselineFailed: ${formatTestCommand(error.command)}\n${error.output.slice(-8000)}` };
       yield* reporter.write(failed);
@@ -166,7 +167,7 @@ export const makeCommand = (options: {
       if (markdown === undefined) yield* Console.log("Advisory: baseline failed; would exit 4 without --advisory.");
       return failed;
     })), Effect.catchTag("BaselineTimedOut", error => Effect.gen(function* () {
-      const timedOut: RunReport = { ...reportIdentity, schemaVersion: 2, tool: "mutant.cafe", root,
+      const timedOut: RunReport = { ...metadata, schemaVersion: 2, tool: "mutant.cafe", root,
         baseline: { durationMs: 0, testCommand: error.command }, timeoutMs: config.timeoutMs ?? config.minimumTimeoutMs, results: [],
         failure: `BaselineTimedOut: ${error.message}` };
       yield* reporter.write(timedOut);
@@ -191,7 +192,7 @@ export const runCli = Effect.fn("runCli")(function*(options: {
     Effect.catch((error) => Effect.gen(function*() {
       yield* Console.error(error._tag === "ProgramLoadError" ? `${error.tsconfig}:\n${error.diagnostics.join("\n")}`
         : error._tag === "TestSpawnError" && error.kind === "vitest-version" ? error.message
-        : error._tag === "BaselineTimedOut" ? error.message
+        : error._tag === "BaselineTimedOut" || error._tag === "DuplicateMutantId" ? error.message
         : error._tag === "BaselineFailed" ? `Baseline failed (${error.exitCode}): ${formatTestCommand(error.command)}\n${error.output.slice(-8000)}`
         : String(error));
       yield* Ref.set(code, errorExitCode(error));

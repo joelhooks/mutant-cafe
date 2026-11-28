@@ -90,6 +90,7 @@ export function makeTypeScriptOracle(): TypeOracle {
   const sessions = new Map<string, ProgramSession>();
   const owners = new Map<string, ProgramSession>();
   return {
+    typescriptVersion: ts.version,
     discover(config) {
       const notMutated: NotMutated[] = [];
       const functions: MutableFunction[] = [];

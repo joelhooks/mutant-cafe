@@ -37,6 +37,10 @@ it.effect("distinguishes type-only representatives and rejects a duplicate befor
   const separated = yield* Stream.runCollect(makeSource([a, b]).generate(run));
   expect(separated).toHaveLength(2);
   expect(separated[0]?.id).not.toBe(separated[1]?.id);
-  const duplicate = yield* Stream.runCollect(makeSource([a, a]).generate(run)).pipe(Effect.result);
-  expect(Result.isFailure(duplicate) && duplicate.failure.diagnostics.join("\n")).toMatch(/Duplicate mutant ID/);
+  const emitted: string[] = [];
+  const duplicate = yield* makeSource([a, a]).generate(run).pipe(
+    Stream.tap(mutant => Effect.sync(() => { emitted.push(mutant.id); })), Stream.runDrain, Effect.result,
+  );
+  expect(emitted).toEqual([]);
+  expect(Result.isFailure(duplicate) ? duplicate.failure._tag : "emitted successfully").toBe("DuplicateMutantId");
 }), 20_000);

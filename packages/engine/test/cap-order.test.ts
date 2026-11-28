@@ -38,3 +38,28 @@ it.live("caps original tags first and follows declarations through inference, ne
   expect(yield* discover(roots, [])).toEqual(expected);
   expect(yield* discover([...roots].reverse(), ["target.ts"])).toEqual(expected);
 }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)), 20_000);
+
+it.live("promotes the original tag before canonical-text fallback candidates", () => Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const root = yield* fs.makeTempDirectoryScoped();
+  // An inferred union with object declarations in three files has neither an
+  // annotated union to rank nor one source file to use for declaration order.
+  yield* fs.writeFileString(`${root}/a.ts`, `export const z = { tag: "z" } as const; export const t = { tag: "t" } as const; export const u = { tag: "u" } as const;`);
+  yield* fs.writeFileString(`${root}/b.ts`, `export const y = { tag: "y" } as const; export const x = { tag: "x" } as const; export const v = { tag: "v" } as const; export const s = { tag: "s" } as const;`);
+  yield* fs.writeFileString(`${root}/target.ts`, `
+    import { z, t, u } from "./a.js";
+    import { y, x, v, s } from "./b.js";
+    export function fallback(n: number) {
+      if (n === 0) return { tag: "w" } as const;
+      return n === 1 ? z : n === 2 ? y : n === 3 ? x : n === 4 ? v : n === 5 ? u : n === 6 ? t : s;
+    }
+  `);
+  for (const files of [["a.ts", "b.ts", "target.ts"], ["target.ts", "b.ts", "a.ts"]]) {
+    yield* fs.writeFileString(`${root}/tsconfig.json`, JSON.stringify({ files, compilerOptions: { module: "NodeNext", strict: true, skipLibCheck: true } }));
+    const { functions } = makeTypeScriptOracle().discover({ root, tsconfig: "tsconfig.json", include: ["target.ts"], exclude: [], functionFilter: [], jobs: 1,
+      timeoutMultiplier: 5, minimumTimeoutMs: 20_000, neverTimeoutMs: 100, outDir: "mutants.out" });
+    const shape = functions.find(fn => fn.name === "fallback")?.shape;
+    expect(shape && "values" in shape && shape.values.map(value => /"tag": \("([^"]+)"/.exec(value.text)?.[1]))
+      .toEqual(["w", "s", "t", "u", "v", "x"]);
+  }
+}).pipe(Effect.scoped, Effect.provide(NodeServices.layer)), 20_000);

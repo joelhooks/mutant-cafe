@@ -50,6 +50,7 @@ export interface MutableFunction {
 
 /** Compiler-specific state stays behind this port. A future adapter can use tsgo. */
 export interface TypeOracle {
+  readonly typescriptVersion?: string;
   readonly discover: (config: RunConfig) => {
     readonly functions: ReadonlyArray<MutableFunction>;
     readonly notMutated: ReadonlyArray<NotMutated>;

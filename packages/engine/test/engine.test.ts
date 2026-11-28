@@ -533,8 +533,8 @@ export const serviceFactory = () => {
 
   it.effect("exposes the service layer and reports unreadable tsconfigs in the typed channel", () => Effect.gen(function* () {
     const source = yield* MutantSource;
+    expect(source.typescriptVersion).toBe(ts.version);
     const result = yield* collect(source, config("missing-tsconfig.json")).pipe(Effect.flip);
-    expect(result._tag).toBe("ProgramLoadError");
-    expect(result.diagnostics.length).toBeGreaterThan(0);
+    expect(result).toMatchObject({ _tag: "ProgramLoadError", diagnostics: [expect.any(String)] });
   }).pipe(Effect.provide(MutantSourceLive)));
 });

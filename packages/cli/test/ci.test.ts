@@ -114,7 +114,8 @@ it.live("real two-file budget runs three mutants in repeatable order", () => Eff
     const result = yield* cli(root, ["--jobs", "1", "--max-mutants", "3"]);
     expect(result.code, result.stderr).toBe(0);
     const output = yield* Schema.decodeEffect(Schema.fromJsonString(RunReport))(yield* fs.readFileString(`${root}/mutants.out/outcomes.json`));
-    expect(output).toMatchObject(reportIdentity);
+    expect(output).toMatchObject({ ...reportIdentity, typescriptVersion: expect.stringMatching(/^\d+\.\d+\.\d+/) });
+    expect(output.typescriptVersion).toBe(all.typescriptVersion);
     expect(output.results.map(r => r.outcome)).toEqual(["caught", "caught", "caught"]);
     expect(output.results.map(r => r.mutant.id)).toEqual(all.mutants.slice(0, 3).map(m => m.id));
     expect({ selected: output.selected, run: output.run, budgetSkipped: output.budgetSkipped }).toEqual({ selected: 4, run: 3, budgetSkipped: 1 });
@@ -129,7 +130,7 @@ it.live("JSON list is one published-schema document with the text ids and budget
   const json = yield* cli(root, ["--list", "--format", "json", "--max-mutants", "3"]);
   expect(json.code, json.stderr).toBe(0);
   const decoded = yield* Schema.decodeEffect(Schema.fromJsonString(MutantList))(json.stdout);
-  expect(decoded).toMatchObject(reportIdentity);
+  expect(decoded).toMatchObject({ ...reportIdentity, typescriptVersion: expect.stringMatching(/^\d+\.\d+\.\d+/) });
   expect(decoded.counts).toEqual({ selected: 9, run: 0, budgetSkipped: 6 });
   expect(decoded.mutants).toHaveLength(3);
   expect(Array.isArray(decoded.notMutated)).toBe(true);
