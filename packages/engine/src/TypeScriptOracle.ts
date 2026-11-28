@@ -4,6 +4,7 @@ import { dirname, resolve, relative, matchesGlob } from "node:path";
 import ts from "typescript";
 import { ProgramLoadError, type Mutant, type NotMutated, type RunConfig, type Viability } from "@mutant-cafe/core";
 import type { MutableFunction, ReturnShape, TaggedValue, TypeOracle, Value } from "./TypeOracle.ts";
+import { runtimeBindings, runtimeSyntax } from "./RuntimeEdit.ts";
 
 type FunctionNode = ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression | ts.MethodDeclaration;
 type Family = "Effect" | "Option" | "Stream" | "Layer";
@@ -102,6 +103,7 @@ export function makeTypeScriptOracle(): TypeOracle {
         if (config.exclude.some((glob) => matchesGlob(local, glob))) continue;
         owners.set(file, session);
         const api = imports(source);
+        const bindings = runtimeBindings(source);
         const excluded = new Set<ts.Node>();
         const visit = (node: ts.Node): void => {
           try {
@@ -139,7 +141,8 @@ export function makeTypeScriptOracle(): TypeOracle {
                       : "values" in shape ? shape.values.filter((value) => isEquivalentSuccess(value.text, shape.kind === "Effect" ? originals : equivalentLiteralValues(body))).map((value) => value.text) : [],
                     span: { start: { line: a.line + 1, column: a.character + 1 }, end: { line: b.line + 1, column: b.character + 1 } },
                     startOffset: start, endOffset: end, original: body.getText(source),
-                    identityFile: local, logicalSpan: { offset: start - node.getStart(source), length: end - start },
+                    identityFile: local, runtimeBindings: bindings,
+                    runtimeOriginal: (() => { let syntax: unknown; return () => syntax ??= runtimeSyntax(body, bindings); })(),
                     sourcePrefix: source.text.slice(0, start), importInsertionOffset: importInsertionOffset(source), extraImports: mutationImports(source),
                     literal: literalOfBody(body, checker),
                     block: ts.isBlock(body), generator: generator !== undefined,
@@ -164,7 +167,7 @@ export function makeTypeScriptOracle(): TypeOracle {
                   found.push({ file, name, functionLike: false, generationIssue: () => typedCallIssue(body, checker), notices: shapeNotices(shapeOf(type, checker, node, body), type, checker, node), returnType: returnTypeText(type, checker, node), displayReturnType: checker.typeToString(type, node),
                     equivalentValues: [], span: { start: { line: a.line + 1, column: a.character + 1 }, end: { line: b.line + 1, column: b.character + 1 } },
                     startOffset: body.getStart(source), endOffset: body.getEnd(), original: body.getText(source), literal: undefined,
-                    identityFile: local, logicalSpan: { offset: body.getStart(source) - node.getStart(source), length: body.getWidth(source) },
+                    identityFile: local, runtimeBindings: bindings,
                     sourcePrefix: source.text.slice(0, body.getStart(source)), importInsertionOffset: importInsertionOffset(source), extraImports: mutationImports(source),
                     block: false, generator: false, shape: shapeOf(type, checker, node, body), api });
                 }
@@ -911,8 +914,28 @@ function synthesizeValues(type: ts.Type, checker: ts.TypeChecker, location: ts.N
     if (scalar) {
       members.sort((a, b) => a.isNumberLiteral() && b.isNumberLiteral() ? a.value - b.value : checker.typeToString(a).localeCompare(checker.typeToString(b), "en"));
     }
-    const values = members.flatMap(member => descend(member));
-    return scalar ? values : values.map(value => [valueKey(value.text), value] as const)
+    const variants = new Map(members.map(member => [member, descend(member)] as const));
+    const values = [...variants.values()].flat();
+    if (scalar) return values;
+    if (values.length > 6) {
+      // Checker-interned unions can borrow member order from another file.
+      // Read the annotated union itself for the capped tagged variants.
+      const annotation = isFunction(location) ? location.type : undefined;
+      const alias = type.aliasSymbol?.declarations?.find(ts.isTypeAliasDeclaration)?.type;
+      const ordered = ts.isUnionTypeNode(annotation ?? location) ? annotation : alias;
+      if (ordered && ts.isUnionTypeNode(ordered)) {
+        const ranks = new Map<ts.Type, number>();
+        for (const term of ordered.types) {
+          const resolved = checker.getTypeFromTypeNode(term);
+          for (const member of resolved.isUnion() ? resolved.types : [resolved]) if (!ranks.has(member)) ranks.set(member, ranks.size);
+        }
+        if (members.every(member => ranks.has(member))) {
+          const byDeclaration = [...members].sort((a, b) => ranks.get(a)! - ranks.get(b)!);
+          return byDeclaration.flatMap(member => variants.get(member) ?? []);
+        }
+      }
+    }
+    return values.map(value => [valueKey(value.text), value] as const)
       .sort(([a, left], [b, right]) => a.localeCompare(b, "en")
         || (left.text < right.text ? -1 : left.text > right.text ? 1 : 0))
       .map(([, value]) => value);

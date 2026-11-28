@@ -39,7 +39,8 @@ export interface MutableFunction {
   readonly shape: ReturnShape;
   readonly identityFile?: string;
   readonly identityOrdinal?: number;
-  readonly logicalSpan?: { readonly offset: number; readonly length: number };
+  readonly runtimeBindings?: ReadonlyMap<string, readonly string[]>;
+  readonly runtimeOriginal?: () => unknown;
   readonly importInsertionOffset?: number;
   readonly sourcePrefix?: string;
   readonly extraImports?: ReadonlyArray<{ readonly namespace: string; readonly statement: string }>;

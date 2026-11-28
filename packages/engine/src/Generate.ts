@@ -3,20 +3,21 @@
 import { createHash } from "node:crypto";
 import type { Genre, Mutant } from "@mutant-cafe/core";
 import type { MutableFunction, Value } from "./TypeOracle.ts";
+import { runtimeEditFingerprint } from "./RuntimeEdit.ts";
 
 /** Generate from the oracle description; deferred compiler checks stay behind its port. */
 export function* generateFunction(fn: MutableFunction): Generator<Mutant, string | undefined> {
   const issue = fn.generationIssue?.();
   if (issue) return issue;
   const api = fn.api;
-  const candidate = (genre: Genre, expression: string, value: Value = { text: "", synthetic: false }, description = expression): Mutant => {
+  const candidate = (genre: Genre, expression: string, value: Value = { text: "", synthetic: false }, description = expression, runtimeExpression = expression, original?: unknown): Mutant => {
     // A return annotation on the inner function preserves the public inferred
     // contract, even when this replacement only produces never or Option<never>.
     const pinned = `((): ${fn.returnType} => (${expression}))()`;
     const text = fn.block
       ? `{ return ${fn.generator ? "yield* " : ""}${pinned}; }`
       : `(${pinned})`;
-    return makeMutant(fn, genre, text, value.synthetic, description);
+    return makeMutant(fn, genre, text, value.synthetic, description, runtimeExpression, original);
   };
   const shape = fn.shape;
   const fits = (value: Value): boolean => new TextEncoder().encode(value.text).byteLength <= 2048;
@@ -46,7 +47,9 @@ export function* generateFunction(fn: MutableFunction): Generator<Mutant, string
           const recovery = value && succeed ? `${succeed}(${value.text})`
             : die ? `${die}(${JSON.stringify(`mutant.cafe: swallowed ${error.tag}`)})` : undefined;
           if (catchTag && recovery && original) {
-            yield candidate(value ? "SwallowTag" : "TagToDefect", `${original}.pipe(${catchTag}(${JSON.stringify(error.tag)}, () => ${recovery}))`, value, value ? `body.pipe(${catchTag}(${JSON.stringify(error.tag)}, () => ${recovery}))` : `turn ${error.tag} into a defect`);
+            const handler = `${catchTag}(${JSON.stringify(error.tag)}, () => ${recovery})`;
+            yield candidate(value ? "SwallowTag" : "TagToDefect", `${original}.pipe(${handler})`, value, value ? `body.pipe(${handler})` : `turn ${error.tag} into a defect`,
+              handler, [fn.generator ? gen : fn.block ? "block" : "expression", fn.runtimeOriginal?.() ?? fn.original]);
           }
         }
       }
@@ -85,7 +88,7 @@ export function* generateFunction(fn: MutableFunction): Generator<Mutant, string
       break;
     }
     case "Void":
-      if (!fn.equivalentValues.includes("{}")) yield makeMutant(fn, "FnValue", "{}", false, "an empty body");
+      if (!fn.equivalentValues.includes("{}")) yield makeMutant(fn, "FnValue", "{}", false, "an empty body", "{}");
       break;
     default: {
       const genre = shape.kind === "Boolean" ? "BooleanFlip" : shape.kind === "Literal" ? "LiteralCycle" : "FnValue";
@@ -97,7 +100,7 @@ export function* generateFunction(fn: MutableFunction): Generator<Mutant, string
   }
 }
 
-function makeMutant(fn: MutableFunction, genre: Genre, text: string, synthetic: boolean, description: string): Mutant {
+function makeMutant(fn: MutableFunction, genre: Genre, text: string, synthetic: boolean, description: string, expression: string, original?: unknown): Mutant {
   const additions = fn.extraImports?.filter(item => text.includes(`${item.namespace}.`)) ?? [];
   const prefix = fn.sourcePrefix ?? "";
   const insertion = fn.importInsertionOffset ?? 0;
@@ -106,7 +109,8 @@ function makeMutant(fn: MutableFunction, genre: Genre, text: string, synthetic: 
     : { startOffset: fn.startOffset, endOffset: fn.endOffset, text };
   // Identity describes the logical edit, never the physical prefix retained to
   // insert imports. Source line shifts above a binding do not retarget its id.
-  const id = createHash("sha256").update(JSON.stringify([fn.identityFile ?? fn.file, fn.name, fn.identityOrdinal ?? 0, fn.logicalSpan, genre, text, additions.map(item => item.statement)])).digest("hex").slice(0, 24);
+  const fingerprint = runtimeEditFingerprint(expression, additions.map(item => item.statement), fn.runtimeBindings, original);
+  const id = createHash("sha256").update(JSON.stringify([fn.identityFile ?? fn.file, fn.name, fn.identityOrdinal ?? 0, genre, fn.block, fn.generator, fingerprint])).digest("hex").slice(0, 24);
   return {
     id, file: fn.file, functionName: fn.name, returnType: fn.returnType, displayReturnType: fn.displayReturnType, genre,
     description: `replace ${fn.name} -> ${fn.returnType} with ${description}`,
