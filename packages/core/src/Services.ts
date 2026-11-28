@@ -6,7 +6,7 @@ import type * as Stream from "effect/Stream";
 import type { RunConfig } from "./Config.ts";
 import type {
   BaselineFailed, BaselineTimedOut,
-  ProgramLoadError,
+  GenerationError, ProgramLoadError,
   ReportWriteError,
   ScratchError,
   TestSpawnError,
@@ -20,8 +20,10 @@ export type Viability =
 export class MutantSource extends Context.Service<
   MutantSource,
   {
-    readonly notMutated: (config: RunConfig) => Effect.Effect<ReadonlyArray<NotMutated>, ProgramLoadError>;
-    readonly generate: (config: RunConfig) => Stream.Stream<Mutant, ProgramLoadError>;
+    /** The compiler loaded by the generator, not the project's declared dependency. */
+    readonly typescriptVersion?: string;
+    readonly notMutated: (config: RunConfig) => Effect.Effect<ReadonlyArray<NotMutated>, GenerationError>;
+    readonly generate: (config: RunConfig) => Stream.Stream<Mutant, GenerationError>;
     readonly checkViable: (mutant: Mutant) => Effect.Effect<Viability, ProgramLoadError>;
   }
 >()("mutant.cafe/MutantSource") {}

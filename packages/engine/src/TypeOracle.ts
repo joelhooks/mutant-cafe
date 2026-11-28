@@ -39,7 +39,8 @@ export interface MutableFunction {
   readonly shape: ReturnShape;
   readonly identityFile?: string;
   readonly identityOrdinal?: number;
-  readonly logicalSpan?: { readonly offset: number; readonly length: number };
+  readonly runtimeBindings?: (name: string) => readonly string[] | undefined;
+  readonly runtimeOriginal?: () => unknown;
   readonly importInsertionOffset?: number;
   readonly sourcePrefix?: string;
   readonly extraImports?: ReadonlyArray<{ readonly namespace: string; readonly statement: string }>;
@@ -49,6 +50,7 @@ export interface MutableFunction {
 
 /** Compiler-specific state stays behind this port. A future adapter can use tsgo. */
 export interface TypeOracle {
+  readonly typescriptVersion?: string;
   readonly discover: (config: RunConfig) => {
     readonly functions: ReadonlyArray<MutableFunction>;
     readonly notMutated: ReadonlyArray<NotMutated>;

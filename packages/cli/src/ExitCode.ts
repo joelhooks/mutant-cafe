@@ -13,6 +13,7 @@ export const errorExitCode = (error: { readonly _tag: string; readonly kind?: st
     case "TestSpawnError": return error.kind === "vitest-version" ? 8 : 70;
     case "DiffMismatch": return 5;
     case "DiffParseError": return 6;
+    case "DuplicateMutantId": return 9;
     case "ProgramLoadError": case "UsageError": case "ShowHelp": case "InvalidValue": case "MissingFlag":
     case "UnrecognizedArgument": return 1;
     default: return 70;

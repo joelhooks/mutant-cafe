@@ -1,4 +1,4 @@
-import { MutantSource, ProgramLoadError, type Mutant, type NotMutated, type RunConfig, type Viability } from "@mutant-cafe/core";
+import { DuplicateMutantId, MutantSource, ProgramLoadError, type Mutant, type NotMutated, type RunConfig, type Viability } from "@mutant-cafe/core";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
@@ -16,6 +16,8 @@ export const MutantSourceLive: Layer.Layer<MutantSource> = Layer.effect(
   Effect.sync(() => makeMutantSource(makeTypeScriptOracle())),
 );
 
+const mutationSite = ({ file, functionName, genre, span }: Mutant) => ({ file, functionName, genre, line: span.start.line });
+
 export function makeMutantSource(oracle: TypeOracle): MutantSource["Service"] {
   // Discovery results belong to the call, not to the warm compiler. Asking for
   // another selection cannot clear a caller's skips or partially consumed stream.
@@ -24,6 +26,7 @@ export function makeMutantSource(oracle: TypeOracle): MutantSource["Service"] {
       const discovered = oracle.discover(config);
       const notMutated: NotMutated[] = [...discovered.notMutated];
       const mutants: Mutant[] = [];
+      const byId = new Map<string, Mutant>();
       const failed = new Set<typeof discovered.functions[number]>();
       const generatedFunctions = discovered.functions.map(fn => {
         try {
@@ -57,17 +60,23 @@ export function makeMutantSource(oracle: TypeOracle): MutantSource["Service"] {
           }
           if (reasons.length) notMutated.push({ file: fn.file, functionName: fn.name, span: fn.span, reason: [...new Set(reasons)].join("; ") });
         }
-        mutants.push(...generated);
+        for (const mutant of generated) {
+          const previous = byId.get(mutant.id);
+          if (previous) throw new DuplicateMutantId({ id: mutant.id, first: mutationSite(previous), second: mutationSite(mutant) });
+          byId.set(mutant.id, mutant);
+          mutants.push(mutant);
+        }
       }
       return { mutants, notMutated: [...new Map(notMutated.map(item => [JSON.stringify(item), item])).values()] };
     },
     catch: (error) => {
-      if (Schema.is(ProgramLoadError)(error)) return error;
+      if (Schema.is(ProgramLoadError)(error) || Schema.is(DuplicateMutantId)(error)) return error;
       // Unexpected outer defects are not config failures. Target analysis is isolated above.
       throw error;
     },
   });
   return {
+    ...(oracle.typescriptVersion === undefined ? {} : { typescriptVersion: oracle.typescriptVersion }),
     notMutated: (config) => discover(config).pipe(Effect.map(result => result.notMutated)),
     generate: (config) => Stream.unwrap(discover(config).pipe(Effect.map(result => Stream.fromIterable(result.mutants)))),
     checkViable: (mutant) => Effect.sync((): Viability => {

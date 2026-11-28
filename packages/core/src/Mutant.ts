@@ -1,4 +1,5 @@
 import * as Schema from "effect/Schema";
+import manifest from "../../mutant-cafe/package.json" with { type: "json" };
 
 export const Genre = Schema.Literals([
   "EffectSucceed",
@@ -114,7 +115,19 @@ export const SelectionCounts = Schema.Struct({
 });
 export type SelectionCounts = typeof SelectionCounts.Type;
 
+// Missing metadata denotes a legacy report. Never compare IDs across epochs.
+export const reportIdentity = { idEpoch: 1, toolVersion: manifest.version } as const;
+export const reportMetadata = (typescriptVersion?: string) => ({
+  ...reportIdentity, ...(typescriptVersion === undefined ? {} : { typescriptVersion }),
+});
+const reportIdentityFields = {
+  idEpoch: Schema.optional(Schema.Int),
+  toolVersion: Schema.optional(Schema.String),
+  typescriptVersion: Schema.optional(Schema.String),
+};
+
 export const MutantList = Schema.Struct({
+  ...reportIdentityFields,
   schemaVersion: Schema.Literal(2),
   tool: Schema.Literal("mutant.cafe"),
   mutants: Schema.Array(Mutant),
@@ -133,6 +146,7 @@ export const ReachabilityProbe = Schema.Struct({
 export type ReachabilityProbe = typeof ReachabilityProbe.Type;
 
 export const RunReport = Schema.Struct({
+  ...reportIdentityFields,
   hostRestarts: Schema.optional(Schema.Int),
   poolResets: Schema.optional(Schema.Int),
   reachabilityProbes: Schema.optional(Schema.Array(ReachabilityProbe)),

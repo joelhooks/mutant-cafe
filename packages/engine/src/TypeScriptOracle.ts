@@ -4,6 +4,16 @@ import { dirname, resolve, relative, matchesGlob } from "node:path";
 import ts from "typescript";
 import { ProgramLoadError, type Mutant, type NotMutated, type RunConfig, type Viability } from "@mutant-cafe/core";
 import type { MutableFunction, ReturnShape, TaggedValue, TypeOracle, Value } from "./TypeOracle.ts";
+import { bindingsAt, sourceReferences, runtimeSyntax } from "./RuntimeEdit.ts";
+
+const compareText = (a: string, b: string): number => a < b ? -1 : a > b ? 1 : 0;
+function runtimeIdentity(checker: ts.TypeChecker, body: ts.ConciseBody) {
+  let original: unknown;
+  return {
+    runtimeBindings: bindingsAt(checker, body.parent),
+    runtimeOriginal: () => original ??= runtimeSyntax(body, sourceReferences(checker)),
+  };
+}
 
 type FunctionNode = ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression | ts.MethodDeclaration;
 type Family = "Effect" | "Option" | "Stream" | "Layer";
@@ -80,6 +90,7 @@ export function makeTypeScriptOracle(): TypeOracle {
   const sessions = new Map<string, ProgramSession>();
   const owners = new Map<string, ProgramSession>();
   return {
+    typescriptVersion: ts.version,
     discover(config) {
       const notMutated: NotMutated[] = [];
       const functions: MutableFunction[] = [];
@@ -96,9 +107,11 @@ export function makeTypeScriptOracle(): TypeOracle {
         const local = relative(config.root, file).replaceAll("\\", "/");
         // Test support lives beside the project, so judge it relative to the tsconfig.
         const project = relative(dirname(configPath), file).replaceAll("\\", "/");
-        if (source.isDeclarationFile || local.startsWith("../") || /(?:^|\/)(?:node_modules|__tests__|__mocks__|tests?)\//.test(project) || /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(local)) continue;
-        for (const glob of config.include) if (matchesGlob(local, glob)) matched.add(glob);
-        if (config.include.length && !config.include.some((glob) => matchesGlob(local, glob))) continue;
+        if (source.isDeclarationFile || local.startsWith("../") || /(?:^|\/)node_modules\//.test(project) || /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(local)) continue;
+        const includedBy = config.include.filter(glob => matchesGlob(local, glob));
+        if (/(?:^|\/)(?:__tests__|__mocks__|tests?)\//.test(project) && (config.explicitIncludes !== true || includedBy.length === 0)) continue;
+        for (const glob of includedBy) matched.add(glob);
+        if (config.include.length && includedBy.length === 0) continue;
         if (config.exclude.some((glob) => matchesGlob(local, glob))) continue;
         owners.set(file, session);
         const api = imports(source);
@@ -139,7 +152,7 @@ export function makeTypeScriptOracle(): TypeOracle {
                       : "values" in shape ? shape.values.filter((value) => isEquivalentSuccess(value.text, shape.kind === "Effect" ? originals : equivalentLiteralValues(body))).map((value) => value.text) : [],
                     span: { start: { line: a.line + 1, column: a.character + 1 }, end: { line: b.line + 1, column: b.character + 1 } },
                     startOffset: start, endOffset: end, original: body.getText(source),
-                    identityFile: local, logicalSpan: { offset: start - node.getStart(source), length: end - start },
+                    identityFile: local, ...runtimeIdentity(checker, body),
                     sourcePrefix: source.text.slice(0, start), importInsertionOffset: importInsertionOffset(source), extraImports: mutationImports(source),
                     literal: literalOfBody(body, checker),
                     block: ts.isBlock(body), generator: generator !== undefined,
@@ -164,7 +177,7 @@ export function makeTypeScriptOracle(): TypeOracle {
                   found.push({ file, name, functionLike: false, generationIssue: () => typedCallIssue(body, checker), notices: shapeNotices(shapeOf(type, checker, node, body), type, checker, node), returnType: returnTypeText(type, checker, node), displayReturnType: checker.typeToString(type, node),
                     equivalentValues: [], span: { start: { line: a.line + 1, column: a.character + 1 }, end: { line: b.line + 1, column: b.character + 1 } },
                     startOffset: body.getStart(source), endOffset: body.getEnd(), original: body.getText(source), literal: undefined,
-                    identityFile: local, logicalSpan: { offset: body.getStart(source) - node.getStart(source), length: body.getWidth(source) },
+                    identityFile: local, ...runtimeIdentity(checker, body),
                     sourcePrefix: source.text.slice(0, body.getStart(source)), importInsertionOffset: importInsertionOffset(source), extraImports: mutationImports(source),
                     block: false, generator: false, shape: shapeOf(type, checker, node, body), api });
                 }
@@ -569,7 +582,7 @@ function shapeOf(type: ts.Type, checker: ts.TypeChecker, node: ts.Node, body: ts
     const errors = shapes.flatMap((shape) => shape.kind === "Effect" ? shape.errors : []);
     return { kind: "Effect",
       values: bounded.values, omittedValues: bounded.omitted, synthesisIssues: shapes.flatMap(shape => shape.synthesisIssues ?? []), enumerateRecoveries: bounded.values.length <= 4 && successes.every(smallFinite),
-      errors: [...new Map(errors.map((error) => [error.tag, error])).values()].sort((a, b) => a.tag.localeCompare(b.tag, "en")),
+      errors: [...new Map(errors.map((error) => [error.tag, error])).values()].sort((a, b) => compareText(a.tag, b.tag)),
     };
   }
   const detected = family(type, checker);
@@ -702,7 +715,7 @@ function literalData(node: ts.Node): unknown {
       if (value === undefined) return undefined;
       fields.push([field.name.getText().replace(/^["']|["']$/g, ""), value]);
     }
-    return fields.sort(([a], [b]) => a.localeCompare(b, "en"));
+    return fields.sort(([a], [b]) => compareText(a, b));
   }
   return undefined;
 }
@@ -907,11 +920,53 @@ function synthesizeValues(type: ts.Type, checker: ts.TypeChecker, location: ts.N
   if (type.isUnion()) {
     const members = [...type.types];
     // The checker can intern scalar unions in different orders across selections.
-    // Tagged structural variants retain their declaration order for cap selection.
-    if (members.every(member => member.isLiteral() || !!(member.flags & (ts.TypeFlags.BooleanLiteral | ts.TypeFlags.Null | ts.TypeFlags.Undefined)))) {
-      members.sort((a, b) => a.isNumberLiteral() && b.isNumberLiteral() ? a.value - b.value : checker.typeToString(a).localeCompare(checker.typeToString(b), "en"));
+    const scalar = members.every(member => member.isLiteral() || !!(member.flags & (ts.TypeFlags.BooleanLiteral | ts.TypeFlags.Null | ts.TypeFlags.Undefined)));
+    if (scalar) {
+      members.sort((a, b) => a.isNumberLiteral() && b.isNumberLiteral() ? a.value - b.value : compareText(checker.typeToString(a), checker.typeToString(b)));
     }
-    return members.flatMap(member => descend(member));
+    const variants = new Map(members.map(member => [member, descend(member)] as const));
+    const values = [...variants.values()].flat();
+    if (scalar) return values;
+    if (values.length > 6) {
+      // Checker-interned unions can borrow member order from another file.
+      // Read the annotated union itself for the capped tagged variants.
+      const annotation = isFunction(location) ? location.type : undefined;
+      const annotated = annotation && ts.isTypeReferenceNode(annotation) ? checker.getSymbolAtLocation(annotation.typeName) : undefined;
+      const declaration = annotated && annotated.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(annotated) : annotated;
+      const declarationsInOrder = new Set([annotation, declaration?.declarations?.find(ts.isTypeAliasDeclaration)?.type,
+        type.aliasSymbol?.declarations?.find(ts.isTypeAliasDeclaration)?.type]);
+      for (const ordered of declarationsInOrder) {
+        if (!ordered || !ts.isUnionTypeNode(ordered)) continue;
+        const ranks = new Map<ts.Type, number>();
+        const declarations = new Map<ts.Declaration, number>();
+        for (const term of ordered.types) {
+          const resolved = checker.getTypeFromTypeNode(term);
+          for (const member of resolved.isUnion() ? resolved.types : [resolved]) {
+            if (ranks.has(member)) continue;
+            const rank = ranks.size;
+            ranks.set(member, rank);
+            for (const decl of member.getSymbol()?.declarations ?? []) if (!declarations.has(decl)) declarations.set(decl, rank);
+          }
+        }
+        // Instantiation creates new Type objects, but retains the declarations.
+        const ranked = members.map(member => ({ member, rank: ranks.get(member)
+          ?? member.getSymbol()?.declarations?.map(decl => declarations.get(decl)).find(rank => rank !== undefined) }));
+        if (ranked.every(item => item.rank !== undefined) && new Set(ranked.map(item => item.rank)).size === members.length) {
+          const byDeclaration = ranked.sort((a, b) => a.rank! - b.rank!).map(item => item.member);
+          return byDeclaration.flatMap(member => variants.get(member) ?? []);
+        }
+      }
+      // Inferred anonymous branches have source declarations but no union node.
+      // Across files there is no shared declaration order; use canonical values.
+      const sites = members.map(member => ({ member, site: member.getSymbol()?.declarations?.[0] }));
+      if (sites.every(({ site }) => site && site.getSourceFile() === location.getSourceFile())
+        && new Set(sites.map(({ site }) => site?.pos)).size === members.length) {
+        return sites.sort((a, b) => a.site!.pos - b.site!.pos).flatMap(({ member }) => variants.get(member) ?? []);
+      }
+    }
+    return values.map(value => [valueKey(value.text), value] as const)
+      .sort(([a, left], [b, right]) => compareText(a, b) || compareText(left.text, right.text))
+      .map(([, value]) => value);
   }
   if (type.isStringLiteral()) return [value(JSON.stringify(type.value))];
   if (type.isNumberLiteral()) return [value(String(type.value))];
@@ -934,7 +989,7 @@ function synthesizeValues(type: ts.Type, checker: ts.TypeChecker, location: ts.N
   }
   if ((type.flags & ts.TypeFlags.Object || type.isIntersection()) && !type.getCallSignatures().length && !type.getConstructSignatures().length) {
     const fields: Array<{ name: string; values: Value[] }> = [];
-    for (const prop of type.getProperties()) {
+    for (const prop of [...type.getProperties()].sort((a, b) => compareText(a.name, b.name))) {
       if (prop.flags & ts.SymbolFlags.Optional) continue;
       if (!/^[$\w]+$/.test(prop.name)) return [];
       const values = descend(checker.getTypeOfSymbolAtLocation(prop, location));

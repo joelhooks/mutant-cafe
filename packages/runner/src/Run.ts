@@ -1,7 +1,7 @@
 import {
-  excludeLinkedCandidates, sanitizeReportTelemetry, MutantSource, MutantResult, NotMutated, ReachabilityProbe, Reporter, Scratch, TestRunner,
+  reportMetadata, excludeLinkedCandidates, sanitizeReportTelemetry, MutantSource, MutantResult, NotMutated, ReachabilityProbe, Reporter, Scratch, TestRunner,
   Baseline, BaselineFailed, BaselineTimedOut, formatTestCommand, type Mutant,
-  type ProgramLoadError, type ReportWriteError, type RunConfig, type RunReport,
+  type GenerationError, type ReportWriteError, type RunConfig, type RunReport,
   type ScratchDir, ScratchError, type TestSpawnError
 } from "@mutant-cafe/core";
 import { createEffectActor, createEffectLogic, join, send, setupEffect } from "@xstate/effect";
@@ -16,7 +16,7 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { unreliableFor } from "./Preflight.ts";
 
-type RunError = BaselineFailed | BaselineTimedOut | ScratchError | TestSpawnError | ProgramLoadError | ReportWriteError;
+type RunError = BaselineFailed | BaselineTimedOut | ScratchError | TestSpawnError | GenerationError | ReportWriteError;
 // XState freezes plain context objects in development. A pool is a live
 // resource, not immutable run data; keep its internals behind a class handle.
 class ScratchPool {
@@ -39,7 +39,7 @@ interface RunState {
 
 /** A separate actor owns each run. Its resources outlive invoked phase tasks. */
 export const runMutants = Effect.fn("Runner.runMutants")(function* (
-  config: RunConfig, mutants?: Stream.Stream<Mutant, ProgramLoadError>
+  config: RunConfig, mutants?: Stream.Stream<Mutant, GenerationError>
 ) {
   const scratch = yield* Scratch;
   const tests = yield* TestRunner;
@@ -48,8 +48,9 @@ export const runMutants = Effect.fn("Runner.runMutants")(function* (
   const scope = yield* Scope.Scope;
   const path = yield* Path.Path;
   const jobs = Math.max(1, Math.floor(config.jobs));
+  const metadata = reportMetadata(source.typescriptVersion);
   const report = (state: RunState): RunReport => sanitizeReportTelemetry({
-    schemaVersion: 2, tool: "mutant.cafe", root: config.root,
+    ...metadata, schemaVersion: 2, tool: "mutant.cafe", root: config.root,
     baseline: state.baseline, timeoutMs: state.timeoutMs, results: state.results, notMutated: state.notMutated, reachabilityProbes: state.probes, hostRestarts: state.hostRestarts, poolResets: state.poolResets,
     ...(state.failure === undefined ? {} : { failure: state.failure._tag === "BaselineTimedOut" ? `BaselineTimedOut: ${state.failure.message}` : state.failure._tag === "BaselineFailed" ? `${state.failure._tag}: ${formatTestCommand(state.failure.command)}\n${state.failure.output.slice(-8000)}` : String(state.failure) })
   }).report;
