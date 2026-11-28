@@ -162,6 +162,10 @@ it.live("keeps IDs and descriptions across file, exclusion, diff and root-order 
   for (const args of [["--file", "z.ts"], ["--exclude", "a.ts"], ["--in-diff", "identity.diff"]]) expect(yield* list(args)).toEqual(full);
   yield* configure(["z.ts", "a.ts"]);
   expect(yield* list([])).toEqual(full);
+  yield* fs.writeFileString(`${root}/z.ts`, `type Choice<T> = ${variants(tags).replaceAll("value: number", "value: T")};\n${definition.replace(": Choice", ": Choice<number>")}\n`);
+  const generic = yield* list([]);
+  expect(generic.map(item => item.id)).toEqual(full.map(item => item.id));
+  expect(yield* list(["--file", "z.ts"])).toEqual(generic);
 }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)), 30_000);
 
 it.effect("reports unknown locations honestly and merges runtime analysis skips", () => Effect.gen(function*() {

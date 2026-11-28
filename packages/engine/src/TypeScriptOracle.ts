@@ -923,18 +923,35 @@ function synthesizeValues(type: ts.Type, checker: ts.TypeChecker, location: ts.N
       // Checker-interned unions can borrow member order from another file.
       // Read the annotated union itself for the capped tagged variants.
       const annotation = isFunction(location) ? location.type : undefined;
-      const alias = type.aliasSymbol?.declarations?.find(ts.isTypeAliasDeclaration)?.type;
-      const ordered = ts.isUnionTypeNode(annotation ?? location) ? annotation : alias;
+      const annotated = annotation && ts.isTypeReferenceNode(annotation) ? checker.getSymbolAtLocation(annotation.typeName) : undefined;
+      const declaration = annotated && annotated.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(annotated) : annotated;
+      const ordered = [annotation, declaration?.declarations?.find(ts.isTypeAliasDeclaration)?.type,
+        type.aliasSymbol?.declarations?.find(ts.isTypeAliasDeclaration)?.type].find(node => node && ts.isUnionTypeNode(node));
       if (ordered && ts.isUnionTypeNode(ordered)) {
         const ranks = new Map<ts.Type, number>();
+        const declarations = new Map<ts.Declaration, number>();
         for (const term of ordered.types) {
           const resolved = checker.getTypeFromTypeNode(term);
-          for (const member of resolved.isUnion() ? resolved.types : [resolved]) if (!ranks.has(member)) ranks.set(member, ranks.size);
+          for (const member of resolved.isUnion() ? resolved.types : [resolved]) {
+            if (ranks.has(member)) continue;
+            const rank = ranks.size;
+            ranks.set(member, rank);
+            for (const decl of member.getSymbol()?.declarations ?? []) if (!declarations.has(decl)) declarations.set(decl, rank);
+          }
         }
-        if (members.every(member => ranks.has(member))) {
-          const byDeclaration = [...members].sort((a, b) => ranks.get(a)! - ranks.get(b)!);
+        // Instantiation creates new Type objects, but retains the declarations.
+        const ranked = members.map(member => ({ member, rank: ranks.get(member)
+          ?? member.getSymbol()?.declarations?.map(decl => declarations.get(decl)).find(rank => rank !== undefined) }));
+        if (ranked.every(item => item.rank !== undefined) && new Set(ranked.map(item => item.rank)).size === members.length) {
+          const byDeclaration = ranked.sort((a, b) => a.rank! - b.rank!).map(item => item.member);
           return byDeclaration.flatMap(member => variants.get(member) ?? []);
         }
+      }
+      // Inferred anonymous branches have source declarations but no union node.
+      const sites = members.map(member => ({ member, site: member.getSymbol()?.declarations?.[0] }));
+      if (sites.every(({ site }) => site && site.getSourceFile() === location.getSourceFile())
+        && new Set(sites.map(({ site }) => site?.pos)).size === members.length) {
+        return sites.sort((a, b) => a.site!.pos - b.site!.pos).flatMap(({ member }) => variants.get(member) ?? []);
       }
     }
     return values.map(value => [valueKey(value.text), value] as const)
