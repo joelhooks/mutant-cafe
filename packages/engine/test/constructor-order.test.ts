@@ -5,6 +5,9 @@ import { generateFunction } from "../src/Generate.ts";
 import { makeTypeScriptOracle } from "../src/TypeScriptOracle.ts";
 
 const root = fileURLToPath(new URL("./fixtures/constructor-order/", import.meta.url));
+// Each comparison builds three independent checker programs. Match the repo's
+// 20-second integration budget rather than the 5-second unit default.
+const checkerBudgetMs = 20_000;
 
 const enumerate = (include: string[], name = "target") => {
   const config: RunConfig = {
@@ -27,7 +30,7 @@ it("keeps constructor property order and IDs under single and multiple file filt
   const constructed = full.find(mutant => mutant.genre === "EffectFail" && !mutant.synthetic);
   expect(constructed).toBeDefined();
   expect(constructed!.replacement.text).toContain('{ "cause": undefined, "path": "" }');
-});
+}, checkerBudgetMs);
 
 it("keeps union-valued fields independent of earlier array discovery", () => {
   const full = enumerate([], "policy");
@@ -38,7 +41,7 @@ it("keeps union-valued fields independent of earlier array discovery", () => {
   expect(multiple.map(mutant => mutant.id)).toEqual(full.map(mutant => mutant.id));
   expect(single).toEqual(full);
   expect(multiple).toEqual(full);
-});
+}, checkerBudgetMs);
 
 it.each(["collision", "nested"])("orders colliding representatives deterministically for %s", name => {
   const full = enumerate([], name);
@@ -49,4 +52,4 @@ it.each(["collision", "nested"])("orders colliding representatives deterministic
   expect(multiple.map(mutant => mutant.id)).toEqual(full.map(mutant => mutant.id));
   expect(single).toEqual(full);
   expect(multiple).toEqual(full);
-});
+}, checkerBudgetMs);

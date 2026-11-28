@@ -13,13 +13,13 @@ it("keeps test directories excluded without explicit includes", () => {
   expect(selected.functions.map(fn => fn.name)).toEqual(["production"]);
 });
 
-it("keeps the CLI default include from opting into test directories", () => {
-  const selected = makeTypeScriptOracle().discover({ ...config, include: ["**/*.{ts,tsx}"], explicitIncludes: false });
+it.each([false, undefined])("keeps a default include with intent %s from opting into test directories", explicitIncludes => {
+  const selected = makeTypeScriptOracle().discover({ ...config, include: ["**/*.{ts,tsx}"], explicitIncludes });
   expect(selected.functions.map(fn => fn.name)).toEqual(["production"]);
 });
 
 it("honors explicit fake and workload globs under test directories", () => {
-  const selected = makeTypeScriptOracle().discover({ ...config, include: [
+  const selected = makeTypeScriptOracle().discover({ ...config, explicitIncludes: true, include: [
     "src/**/*.ts", "tests/**/*.fake.ts", "tests/**/*.workload.ts", "test/**/*.fake.ts", "test/**/*.workload.ts"
   ] });
   expect(selected.functions.map(fn => fn.name).sort()).toEqual(["fake", "production", "singularFake", "singularWorkload", "workload"]);

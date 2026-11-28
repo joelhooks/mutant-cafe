@@ -24,6 +24,7 @@ export function makeMutantSource(oracle: TypeOracle): MutantSource["Service"] {
       const discovered = oracle.discover(config);
       const notMutated: NotMutated[] = [...discovered.notMutated];
       const mutants: Mutant[] = [];
+      const byId = new Map<string, Mutant>();
       const failed = new Set<typeof discovered.functions[number]>();
       const generatedFunctions = discovered.functions.map(fn => {
         try {
@@ -57,7 +58,14 @@ export function makeMutantSource(oracle: TypeOracle): MutantSource["Service"] {
           }
           if (reasons.length) notMutated.push({ file: fn.file, functionName: fn.name, span: fn.span, reason: [...new Set(reasons)].join("; ") });
         }
-        mutants.push(...generated);
+        for (const mutant of generated) {
+          const previous = byId.get(mutant.id);
+          if (previous) throw new ProgramLoadError({ tsconfig: config.tsconfig, diagnostics: [
+            `Duplicate mutant ID ${mutant.id}: ${previous.file}:${previous.span.start.line} ${previous.description}; ${mutant.file}:${mutant.span.start.line} ${mutant.description}`,
+          ] });
+          byId.set(mutant.id, mutant);
+          mutants.push(mutant);
+        }
       }
       return { mutants, notMutated: [...new Map(notMutated.map(item => [JSON.stringify(item), item])).values()] };
     },

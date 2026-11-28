@@ -1,4 +1,5 @@
 import * as Schema from "effect/Schema";
+import manifest from "../../mutant-cafe/package.json" with { type: "json" };
 
 export const Genre = Schema.Literals([
   "EffectSucceed",
@@ -115,7 +116,7 @@ export const SelectionCounts = Schema.Struct({
 export type SelectionCounts = typeof SelectionCounts.Type;
 
 // Missing metadata denotes a legacy report. Never compare IDs across epochs.
-export const reportIdentity = { idEpoch: 1, toolVersion: "0.2.0" } as const;
+export const reportIdentity = { idEpoch: 1, toolVersion: manifest.version } as const;
 const reportIdentityFields = {
   idEpoch: Schema.optional(Schema.Int),
   toolVersion: Schema.optional(Schema.String),

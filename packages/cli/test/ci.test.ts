@@ -1,6 +1,6 @@
 import { it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { BaselineFailed, MutantList, MutantSource, Reporter, RunReport, Scratch, TestRunner, type Mutant } from "@mutant-cafe/core";
+import { reportIdentity, BaselineFailed, MutantList, MutantSource, Reporter, RunReport, Scratch, TestRunner, type Mutant } from "@mutant-cafe/core";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -114,7 +114,7 @@ it.live("real two-file budget runs three mutants in repeatable order", () => Eff
     const result = yield* cli(root, ["--jobs", "1", "--max-mutants", "3"]);
     expect(result.code, result.stderr).toBe(0);
     const output = yield* Schema.decodeEffect(Schema.fromJsonString(RunReport))(yield* fs.readFileString(`${root}/mutants.out/outcomes.json`));
-    expect(output).toMatchObject({ idEpoch: 1, toolVersion: "0.2.0" });
+    expect(output).toMatchObject(reportIdentity);
     expect(output.results.map(r => r.outcome)).toEqual(["caught", "caught", "caught"]);
     expect(output.results.map(r => r.mutant.id)).toEqual(all.mutants.slice(0, 3).map(m => m.id));
     expect({ selected: output.selected, run: output.run, budgetSkipped: output.budgetSkipped }).toEqual({ selected: 4, run: 3, budgetSkipped: 1 });
@@ -129,7 +129,7 @@ it.live("JSON list is one published-schema document with the text ids and budget
   const json = yield* cli(root, ["--list", "--format", "json", "--max-mutants", "3"]);
   expect(json.code, json.stderr).toBe(0);
   const decoded = yield* Schema.decodeEffect(Schema.fromJsonString(MutantList))(json.stdout);
-  expect(decoded).toMatchObject({ idEpoch: 1, toolVersion: "0.2.0" });
+  expect(decoded).toMatchObject(reportIdentity);
   expect(decoded.counts).toEqual({ selected: 9, run: 0, budgetSkipped: 6 });
   expect(decoded.mutants).toHaveLength(3);
   expect(Array.isArray(decoded.notMutated)).toBe(true);

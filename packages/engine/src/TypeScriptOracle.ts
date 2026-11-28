@@ -4,7 +4,16 @@ import { dirname, resolve, relative, matchesGlob } from "node:path";
 import ts from "typescript";
 import { ProgramLoadError, type Mutant, type NotMutated, type RunConfig, type Viability } from "@mutant-cafe/core";
 import type { MutableFunction, ReturnShape, TaggedValue, TypeOracle, Value } from "./TypeOracle.ts";
-import { runtimeBindings, runtimeSyntax } from "./RuntimeEdit.ts";
+import { bindingsAt, sourceReferences, runtimeSyntax } from "./RuntimeEdit.ts";
+
+const compareText = (a: string, b: string): number => a < b ? -1 : a > b ? 1 : 0;
+function runtimeIdentity(checker: ts.TypeChecker, body: ts.ConciseBody) {
+  let original: unknown;
+  return {
+    runtimeBindings: bindingsAt(checker, body.parent),
+    runtimeOriginal: () => original ??= runtimeSyntax(body, sourceReferences(checker)),
+  };
+}
 
 type FunctionNode = ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression | ts.MethodDeclaration;
 type Family = "Effect" | "Option" | "Stream" | "Layer";
@@ -99,13 +108,12 @@ export function makeTypeScriptOracle(): TypeOracle {
         const project = relative(dirname(configPath), file).replaceAll("\\", "/");
         if (source.isDeclarationFile || local.startsWith("../") || /(?:^|\/)node_modules\//.test(project) || /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(local)) continue;
         const includedBy = config.include.filter(glob => matchesGlob(local, glob));
-        if (/(?:^|\/)(?:__tests__|__mocks__|tests?)\//.test(project) && (config.explicitIncludes === false || includedBy.length === 0)) continue;
+        if (/(?:^|\/)(?:__tests__|__mocks__|tests?)\//.test(project) && (config.explicitIncludes !== true || includedBy.length === 0)) continue;
         for (const glob of includedBy) matched.add(glob);
         if (config.include.length && includedBy.length === 0) continue;
         if (config.exclude.some((glob) => matchesGlob(local, glob))) continue;
         owners.set(file, session);
         const api = imports(source);
-        const bindings = runtimeBindings(source);
         const excluded = new Set<ts.Node>();
         const visit = (node: ts.Node): void => {
           try {
@@ -143,8 +151,7 @@ export function makeTypeScriptOracle(): TypeOracle {
                       : "values" in shape ? shape.values.filter((value) => isEquivalentSuccess(value.text, shape.kind === "Effect" ? originals : equivalentLiteralValues(body))).map((value) => value.text) : [],
                     span: { start: { line: a.line + 1, column: a.character + 1 }, end: { line: b.line + 1, column: b.character + 1 } },
                     startOffset: start, endOffset: end, original: body.getText(source),
-                    identityFile: local, runtimeBindings: bindings,
-                    runtimeOriginal: (() => { let syntax: unknown; return () => syntax ??= runtimeSyntax(body, bindings); })(),
+                    identityFile: local, ...runtimeIdentity(checker, body),
                     sourcePrefix: source.text.slice(0, start), importInsertionOffset: importInsertionOffset(source), extraImports: mutationImports(source),
                     literal: literalOfBody(body, checker),
                     block: ts.isBlock(body), generator: generator !== undefined,
@@ -169,7 +176,7 @@ export function makeTypeScriptOracle(): TypeOracle {
                   found.push({ file, name, functionLike: false, generationIssue: () => typedCallIssue(body, checker), notices: shapeNotices(shapeOf(type, checker, node, body), type, checker, node), returnType: returnTypeText(type, checker, node), displayReturnType: checker.typeToString(type, node),
                     equivalentValues: [], span: { start: { line: a.line + 1, column: a.character + 1 }, end: { line: b.line + 1, column: b.character + 1 } },
                     startOffset: body.getStart(source), endOffset: body.getEnd(), original: body.getText(source), literal: undefined,
-                    identityFile: local, runtimeBindings: bindings,
+                    identityFile: local, ...runtimeIdentity(checker, body),
                     sourcePrefix: source.text.slice(0, body.getStart(source)), importInsertionOffset: importInsertionOffset(source), extraImports: mutationImports(source),
                     block: false, generator: false, shape: shapeOf(type, checker, node, body), api });
                 }
@@ -574,7 +581,7 @@ function shapeOf(type: ts.Type, checker: ts.TypeChecker, node: ts.Node, body: ts
     const errors = shapes.flatMap((shape) => shape.kind === "Effect" ? shape.errors : []);
     return { kind: "Effect",
       values: bounded.values, omittedValues: bounded.omitted, synthesisIssues: shapes.flatMap(shape => shape.synthesisIssues ?? []), enumerateRecoveries: bounded.values.length <= 4 && successes.every(smallFinite),
-      errors: [...new Map(errors.map((error) => [error.tag, error])).values()].sort((a, b) => a.tag.localeCompare(b.tag, "en")),
+      errors: [...new Map(errors.map((error) => [error.tag, error])).values()].sort((a, b) => compareText(a.tag, b.tag)),
     };
   }
   const detected = family(type, checker);
@@ -707,7 +714,7 @@ function literalData(node: ts.Node): unknown {
       if (value === undefined) return undefined;
       fields.push([field.name.getText().replace(/^["']|["']$/g, ""), value]);
     }
-    return fields.sort(([a], [b]) => a.localeCompare(b, "en"));
+    return fields.sort(([a], [b]) => compareText(a, b));
   }
   return undefined;
 }
@@ -914,7 +921,7 @@ function synthesizeValues(type: ts.Type, checker: ts.TypeChecker, location: ts.N
     // The checker can intern scalar unions in different orders across selections.
     const scalar = members.every(member => member.isLiteral() || !!(member.flags & (ts.TypeFlags.BooleanLiteral | ts.TypeFlags.Null | ts.TypeFlags.Undefined)));
     if (scalar) {
-      members.sort((a, b) => a.isNumberLiteral() && b.isNumberLiteral() ? a.value - b.value : checker.typeToString(a).localeCompare(checker.typeToString(b), "en"));
+      members.sort((a, b) => a.isNumberLiteral() && b.isNumberLiteral() ? a.value - b.value : compareText(checker.typeToString(a), checker.typeToString(b)));
     }
     const variants = new Map(members.map(member => [member, descend(member)] as const));
     const values = [...variants.values()].flat();
@@ -925,9 +932,10 @@ function synthesizeValues(type: ts.Type, checker: ts.TypeChecker, location: ts.N
       const annotation = isFunction(location) ? location.type : undefined;
       const annotated = annotation && ts.isTypeReferenceNode(annotation) ? checker.getSymbolAtLocation(annotation.typeName) : undefined;
       const declaration = annotated && annotated.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(annotated) : annotated;
-      const ordered = [annotation, declaration?.declarations?.find(ts.isTypeAliasDeclaration)?.type,
-        type.aliasSymbol?.declarations?.find(ts.isTypeAliasDeclaration)?.type].find(node => node && ts.isUnionTypeNode(node));
-      if (ordered && ts.isUnionTypeNode(ordered)) {
+      const declarationsInOrder = new Set([annotation, declaration?.declarations?.find(ts.isTypeAliasDeclaration)?.type,
+        type.aliasSymbol?.declarations?.find(ts.isTypeAliasDeclaration)?.type]);
+      for (const ordered of declarationsInOrder) {
+        if (!ordered || !ts.isUnionTypeNode(ordered)) continue;
         const ranks = new Map<ts.Type, number>();
         const declarations = new Map<ts.Declaration, number>();
         for (const term of ordered.types) {
@@ -948,6 +956,7 @@ function synthesizeValues(type: ts.Type, checker: ts.TypeChecker, location: ts.N
         }
       }
       // Inferred anonymous branches have source declarations but no union node.
+      // Across files there is no shared declaration order; use canonical values.
       const sites = members.map(member => ({ member, site: member.getSymbol()?.declarations?.[0] }));
       if (sites.every(({ site }) => site && site.getSourceFile() === location.getSourceFile())
         && new Set(sites.map(({ site }) => site?.pos)).size === members.length) {
@@ -955,8 +964,7 @@ function synthesizeValues(type: ts.Type, checker: ts.TypeChecker, location: ts.N
       }
     }
     return values.map(value => [valueKey(value.text), value] as const)
-      .sort(([a, left], [b, right]) => a.localeCompare(b, "en")
-        || (left.text < right.text ? -1 : left.text > right.text ? 1 : 0))
+      .sort(([a, left], [b, right]) => compareText(a, b) || compareText(left.text, right.text))
       .map(([, value]) => value);
   }
   if (type.isStringLiteral()) return [value(JSON.stringify(type.value))];
@@ -980,7 +988,7 @@ function synthesizeValues(type: ts.Type, checker: ts.TypeChecker, location: ts.N
   }
   if ((type.flags & ts.TypeFlags.Object || type.isIntersection()) && !type.getCallSignatures().length && !type.getConstructSignatures().length) {
     const fields: Array<{ name: string; values: Value[] }> = [];
-    for (const prop of [...type.getProperties()].sort((a, b) => a.name.localeCompare(b.name, "en"))) {
+    for (const prop of [...type.getProperties()].sort((a, b) => compareText(a.name, b.name))) {
       if (prop.flags & ts.SymbolFlags.Optional) continue;
       if (!/^[$\w]+$/.test(prop.name)) return [];
       const values = descend(checker.getTypeOfSymbolAtLocation(prop, location));

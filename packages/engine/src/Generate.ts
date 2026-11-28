@@ -17,7 +17,7 @@ export function* generateFunction(fn: MutableFunction): Generator<Mutant, string
     const text = fn.block
       ? `{ return ${fn.generator ? "yield* " : ""}${pinned}; }`
       : `(${pinned})`;
-    return makeMutant(fn, genre, text, value.synthetic, description, runtimeExpression, original);
+    return makeMutant(fn, genre, text, value.synthetic, description, runtimeExpression, original, value.text || undefined);
   };
   const shape = fn.shape;
   const fits = (value: Value): boolean => new TextEncoder().encode(value.text).byteLength <= 2048;
@@ -100,7 +100,7 @@ export function* generateFunction(fn: MutableFunction): Generator<Mutant, string
   }
 }
 
-function makeMutant(fn: MutableFunction, genre: Genre, text: string, synthetic: boolean, description: string, expression: string, original?: unknown): Mutant {
+function makeMutant(fn: MutableFunction, genre: Genre, text: string, synthetic: boolean, description: string, expression: string, original?: unknown, representative?: string): Mutant {
   const additions = fn.extraImports?.filter(item => text.includes(`${item.namespace}.`)) ?? [];
   const prefix = fn.sourcePrefix ?? "";
   const insertion = fn.importInsertionOffset ?? 0;
@@ -109,7 +109,7 @@ function makeMutant(fn: MutableFunction, genre: Genre, text: string, synthetic: 
     : { startOffset: fn.startOffset, endOffset: fn.endOffset, text };
   // Identity describes the logical edit, never the physical prefix retained to
   // insert imports. Source line shifts above a binding do not retarget its id.
-  const fingerprint = runtimeEditFingerprint(expression, additions.map(item => item.statement), fn.runtimeBindings, original);
+  const fingerprint = runtimeEditFingerprint(expression, additions.map(item => item.statement), fn.runtimeBindings, original, representative);
   const id = createHash("sha256").update(JSON.stringify([fn.identityFile ?? fn.file, fn.name, fn.identityOrdinal ?? 0, genre, fn.block, fn.generator, fingerprint])).digest("hex").slice(0, 24);
   return {
     id, file: fn.file, functionName: fn.name, returnType: fn.returnType, displayReturnType: fn.displayReturnType, genre,

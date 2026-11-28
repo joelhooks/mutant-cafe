@@ -39,7 +39,7 @@ export interface MutableFunction {
   readonly shape: ReturnShape;
   readonly identityFile?: string;
   readonly identityOrdinal?: number;
-  readonly runtimeBindings?: ReadonlyMap<string, readonly string[]>;
+  readonly runtimeBindings?: (name: string) => readonly string[] | undefined;
   readonly runtimeOriginal?: () => unknown;
   readonly importInsertionOffset?: number;
   readonly sourcePrefix?: string;

@@ -3,8 +3,8 @@
 ## 0.2.0
 
 - **New ID epoch.** Reset ID-keyed comparisons for this release. IDs change once; they no longer depend on source spans and stay stable across file filters and formatting-only edits. JSON lists and reports now include `idEpoch` and `toolVersion`. Old reports remain readable; don't join their IDs to this epoch. Thanks [@dallenpyrah](https://github.com/dallenpyrah) ([#7](https://github.com/joelhooks/mutant-cafe/pull/7)).
-- Test support files stay out of the default scan. An explicit `--file` or config `include` opts them in without enabling declarations, dependencies, or test assertions. Thanks [@dallenpyrah](https://github.com/dallenpyrah) ([#6](https://github.com/joelhooks/mutant-cafe/pull/6)).
-- Synthesized values use deterministic property order and tie-breaking across filters. Capped tagged unions still try the original discriminant first, then the others in declaration order. Thanks [@dallenpyrah](https://github.com/dallenpyrah) ([#9](https://github.com/joelhooks/mutant-cafe/pull/9)).
+- **Broad includes now select test helpers.** If your config already has `include: ["**/*.ts"]`, upgrading will mutate matching support files under `test/`, `tests/`, `__tests__/` and `__mocks__/`. To keep the old behavior, remove the broad `include`, narrow it to production paths, or explicitly exclude those four directories. The default scan still skips them, and declaration files, dependencies and test assertions stay excluded. Thanks [@dallenpyrah](https://github.com/dallenpyrah) ([#6](https://github.com/joelhooks/mutant-cafe/pull/6)).
+- Synthesized object fields and short non-scalar union representatives now sort consistently across filters. This changes some mutant descriptions on upgrade from 0.1.8. Reset description-keyed baselines once, including drovr’s survivor comparison. Capped tagged unions still try the original discriminant first, then the others in declaration order where available. Thanks [@dallenpyrah](https://github.com/dallenpyrah) ([#9](https://github.com/joelhooks/mutant-cafe/pull/9)).
 
 ## 0.1.8
 
