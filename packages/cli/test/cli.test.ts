@@ -242,7 +242,7 @@ it.effect("gives unreliable its own exit code and publishes only report schema v
   expect(reportExitCode({ ...unreliable, results: [...unreliable.results, { ...base.results[0]!, outcome: "untested" }] })).toBe(7);
   expect(yield* invoke(root, [], [mutant()], () => Effect.succeed(unreliable))).toBe(7);
   expect(yield* Schema.decodeUnknownEffect(RunReport)({ ...base, schemaVersion: 1 }).pipe(Effect.result, Effect.map(Result.isFailure))).toBe(true);
-  expect((yield* Schema.decodeEffect(RunReport)(base)).schemaVersion).toBe(2);
+  expect(yield* Schema.decodeEffect(RunReport)(base)).toEqual(base);
 }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)));
 
 it.effect("writes missed output, returns CI failure, and rotates the previous run", () => Effect.gen(function*() {

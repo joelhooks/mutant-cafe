@@ -1,4 +1,4 @@
 {
   "compilerOptions": { "target": "ESNext", "module": "NodeNext", "moduleResolution": "NodeNext", "strict": true, "skipLibCheck": true },
-  "include": ["src/**/*.ts", "tests/**/*.ts", "test/**/*.ts"]
+  "include": ["src/**/*.ts", "tests/**/*.ts", "test/**/*.ts", "__tests__/**/*.ts", "__mocks__/**/*.ts"]
 }

@@ -25,7 +25,17 @@ it("honors explicit fake and workload globs under test directories", () => {
   expect(selected.functions.map(fn => fn.name).sort()).toEqual(["fake", "production", "singularFake", "singularWorkload", "workload"]);
 });
 
-it("still excludes test and spec assertion files with broad explicit includes", () => {
-  const selected = makeTypeScriptOracle().discover({ ...config, include: ["**/*.ts"] });
-  expect(selected.functions.map(fn => fn.name).sort()).toEqual(["fake", "production", "singularFake", "singularWorkload", "workload"]);
+it.each([
+  ["test", ["singularFake", "singularWorkload"]],
+  ["tests", ["fake", "workload"]],
+  ["__tests__", ["internalTestHelper"]],
+  ["__mocks__", ["mockHelper"]],
+] as const)("includes explicit helpers under %s without adding assertion or declaration files", (directory, names) => {
+  const selected = makeTypeScriptOracle().discover({ ...config, explicitIncludes: true, include: [`${directory}/**/*.ts`] });
+  expect(selected.functions.map(fn => fn.name).sort()).toEqual(names);
+});
+
+it("still excludes declarations, test and spec assertion files with broad explicit includes", () => {
+  const selected = makeTypeScriptOracle().discover({ ...config, include: ["**/*.ts"], explicitIncludes: true });
+  expect(selected.functions.map(fn => fn.name).sort()).toEqual(["fake", "internalTestHelper", "mockHelper", "production", "singularFake", "singularWorkload", "workload"]);
 });

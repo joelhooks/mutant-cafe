@@ -49,7 +49,7 @@ export function* generateFunction(fn: MutableFunction): Generator<Mutant, string
           if (catchTag && recovery && original) {
             const handler = `${catchTag}(${JSON.stringify(error.tag)}, () => ${recovery})`;
             yield candidate(value ? "SwallowTag" : "TagToDefect", `${original}.pipe(${handler})`, value, value ? `body.pipe(${handler})` : `turn ${error.tag} into a defect`,
-              handler, [fn.generator ? gen : fn.block ? "block" : "expression", fn.runtimeOriginal?.() ?? fn.original]);
+              fn.generator ? `[${gen}, ${handler}]` : handler, fn.runtimeOriginal?.() ?? fn.original);
           }
         }
       }
